@@ -50,7 +50,7 @@ pub fn main() !void {
             try stdout.writer().print("{s} {c} null\n", .{ @tagName(token), ch });
             try tokens.append(token);
         }
-        try stdout.writer().print("EOF\n", .{});
+        try stdout.writer().print("EOF  null\n", .{});
     } else {
         try io.getStdOut().writer().print("EOF  null\n", .{}); // Placeholder, remove this line when implementing the scanner
     }
