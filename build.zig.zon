@@ -1,5 +1,5 @@
 .{
-    .name = .codecrafters_interpreter,
+    .name = "codecrafters_interpreter",
     .fingerprint = 0x1194d13a7a0f0cf1,
 
     // This is a [Semantic Version](https://semver.org/).

@@ -5,6 +5,8 @@ const io = std.io;
 const Tokens = enum {
     LEFT_PAREN,
     RIGHT_PAREN,
+    LEFT_BRACE,
+    RIGHT_BRACE,
 };
 
 pub fn main() !void {
@@ -45,6 +47,8 @@ pub fn main() !void {
             const token = switch (ch) {
                 '(' => Tokens.LEFT_PAREN,
                 ')' => Tokens.RIGHT_PAREN,
+                '{' => Tokens.LEFT_BRACE,
+                '}' => Tokens.RIGHT_BRACE,
                 else => @panic("unimplemented"),
             };
             try stdout.writer().print("{s} {c} null\n", .{ @tagName(token), ch });
