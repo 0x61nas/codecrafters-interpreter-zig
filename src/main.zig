@@ -22,11 +22,16 @@ const Token = struct {
         EQUAL_EQUAL,
         BANG,
         BANG_EQUAL,
+        LESS,
+        LESS_EQUAL,
+        GREATER,
+        GREATER_EQUAL,
     };
 };
 
 const Lexer = struct {
     tokens: std.ArrayList(Token),
+    prev_token: ?Token,
     has_err: bool,
     line: u64,
     cursor: u64,
@@ -34,6 +39,7 @@ const Lexer = struct {
     pub fn new(alloc: std.mem.Allocator) Lexer {
         return .{
             .tokens = std.ArrayList(Token).init(alloc),
+            .prev_token = null,
             .has_err = false,
             .line = 1,
             .cursor = 0,
@@ -61,25 +67,35 @@ const Lexer = struct {
                 '/' => .{ .typ = .SLASH, .lexme = "/" },
                 '=' => blk: {
                     var tok: Token = .{ .typ = .EQUAL, .lexme = "=" };
-                    if (self.tokens.getLastOrNull()) |last_tok| {
+                    if (self.prev_token) |last_tok| {
                         if (last_tok.typ == .EQUAL) {
                             _ = self.tokens.pop();
                             tok = .{ .typ = .EQUAL_EQUAL, .lexme = "==" };
                         } else if (last_tok.typ == .BANG) {
                             _ = self.tokens.pop();
                             tok = .{ .typ = .BANG_EQUAL, .lexme = "!=" };
+                        } else if (last_tok.typ == .LESS) {
+                            _ = self.tokens.pop();
+                            tok = .{ .typ = .LESS_EQUAL, .lexme = "<=" };
+                        } else if (last_tok.typ == .GREATER) {
+                            _ = self.tokens.pop();
+                            tok = .{ .typ = .GREATER_EQUAL, .lexme = ">=" };
                         }
                     }
                     break :blk tok;
                 },
                 '*' => .{ .typ = .STAR, .lexme = "*" },
                 '!' => .{ .typ = .BANG, .lexme = "!" },
+                '<' => .{ .typ = .LESS, .lexme = "<" },
+                '>' => .{ .typ = .GREATER, .lexme = ">" },
                 else => {
                     self.has_err = true;
+                    self.prev_token = null;
                     try io.getStdErr().writer().print("[line {d}] Error: Unexpected character: {c}\n", .{ self.line, ch });
                     continue;
                 },
             };
+            self.prev_token = token;
             try self.tokens.append(token);
         }
         return;
