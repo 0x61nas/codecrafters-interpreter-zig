@@ -2,18 +2,85 @@ const std = @import("std");
 const process = std.process;
 const io = std.io;
 
-const Tokens = enum {
-    LEFT_PAREN,
-    RIGHT_PAREN,
-    LEFT_BRACE,
-    RIGHT_BRACE,
-    COMMA,
-    DOT,
-    MINUS,
-    PLUS,
-    SEMICOLON,
-    SLASH,
-    STAR,
+const Token = struct {
+    typ: TokenTyp,
+    lexme: []const u8,
+
+    const TokenTyp = enum {
+        LEFT_PAREN,
+        RIGHT_PAREN,
+        LEFT_BRACE,
+        RIGHT_BRACE,
+        COMMA,
+        DOT,
+        MINUS,
+        PLUS,
+        SEMICOLON,
+        SLASH,
+        STAR,
+        EQUAL,
+        EQUAL_EQUAL,
+    };
+};
+
+const Lexer = struct {
+    tokens: std.ArrayList(Token),
+    has_err: bool,
+    line: u64,
+    cursor: u64,
+
+    pub fn new(alloc: std.mem.Allocator) Lexer {
+        return .{
+            .tokens = std.ArrayList(Token).init(alloc),
+            .has_err = false,
+            .line = 1,
+            .cursor = 0,
+        };
+    }
+
+    pub fn lex(self: *Lexer, source: []const u8) !void {
+        const stdout = io.getStdOut();
+        for (source) |ch| {
+            // std.debug.print("eat `{c}`\n", .{ch});
+            self.cursor += 1;
+            if (ch == '\n') {
+                self.line += 1;
+                continue;
+            }
+            const token: Token = switch (ch) {
+                '(' => .{ .typ = .LEFT_PAREN, .lexme = "(" },
+                ')' => .{ .typ = .RIGHT_PAREN, .lexme = ")" },
+                '{' => .{ .typ = .LEFT_BRACE, .lexme = "{" },
+                '}' => .{ .typ = .RIGHT_BRACE, .lexme = "}" },
+                ',' => .{ .typ = .COMMA, .lexme = "," },
+                '.' => .{ .typ = .DOT, .lexme = "." },
+                '-' => .{ .typ = .MINUS, .lexme = "-" },
+                '+' => .{ .typ = .PLUS, .lexme = "+" },
+                ';' => .{ .typ = .SEMICOLON, .lexme = ";" },
+                '/' => .{ .typ = .SLASH, .lexme = "/" },
+                '=' => blk: {
+                    var tok: Token = .{ .typ = .EQUAL, .lexme = "=" };
+                    if (self.tokens.getLastOrNull()) |last_tok| {
+                        if (last_tok.typ == .EQUAL) {
+                            _ = self.tokens.pop();
+                            tok = .{ .typ = .EQUAL_EQUAL, .lexme = "==" };
+                        }
+                    }
+                    break :blk tok;
+                },
+                '*' => .{ .typ = .STAR, .lexme = "*" },
+                else => {
+                    self.has_err = true;
+                    try io.getStdErr().writer().print("[line {d}] Error: Unexpected character: {c}\n", .{ self.line, ch });
+                    continue;
+                },
+            };
+            try self.tokens.append(token);
+            try stdout.writer().print("{s} {s} null\n", .{ @tagName(token.typ), token.lexme });
+        }
+        try stdout.writer().print("EOF  null\n", .{});
+        return;
+    }
 };
 
 pub fn main() !void {
@@ -41,42 +108,16 @@ pub fn main() !void {
     const file_contents = try std.fs.cwd().readFileAlloc(std.heap.page_allocator, filename, std.math.maxInt(usize));
     defer std.heap.page_allocator.free(file_contents);
 
-    const stdout = io.getStdOut();
     // Uncomment this block to pass the first stage
     if (file_contents.len > 0) {
         const alloc = std.heap.page_allocator;
-        var tokens = std.ArrayList(Tokens).init(alloc);
-        defer tokens.deinit();
+        var lexer = Lexer.new(alloc);
 
-        var line_num: usize = 1;
-        for (file_contents) |ch| {
-            // std.debug.print("eat `{c}`\n", .{ch});
-            if (ch == '\n') {
-                line_num += 1;
-                continue;
-            }
-            const token = switch (ch) {
-                '(' => Tokens.LEFT_PAREN,
-                ')' => Tokens.RIGHT_PAREN,
-                '{' => Tokens.LEFT_BRACE,
-                '}' => Tokens.RIGHT_BRACE,
-                ',' => Tokens.COMMA,
-                '.' => Tokens.DOT,
-                '-' => Tokens.MINUS,
-                '+' => Tokens.PLUS,
-                ';' => Tokens.SEMICOLON,
-                '/' => Tokens.SLASH,
-                '*' => Tokens.STAR,
-                else => {
-                    exit_code = 65;
-                    try io.getStdErr().writer().print("[line {d}] Error: Unexpected character: {c}\n", .{ line_num, ch });
-                    continue;
-                },
-            };
-            try stdout.writer().print("{s} {c} null\n", .{ @tagName(token), ch });
-            try tokens.append(token);
+        try lexer.lex(file_contents);
+
+        if (lexer.has_err) {
+            exit_code = 65;
         }
-        try stdout.writer().print("EOF  null\n", .{});
     } else {
         try io.getStdOut().writer().print("EOF  null\n", .{}); // Placeholder, remove this line when implementing the scanner
     }
