@@ -20,6 +20,8 @@ pub fn main() !void {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     std.debug.print("Logs from your program will appear here!\n", .{});
 
+    var exit_code: u8 = 0;
+
     const args = try std.process.argsAlloc(std.heap.page_allocator);
     defer process.argsFree(std.heap.page_allocator, args);
 
@@ -46,9 +48,11 @@ pub fn main() !void {
         var tokens = std.ArrayList(Tokens).init(alloc);
         defer tokens.deinit();
 
+        var line_num: usize = 1;
         for (file_contents) |ch| {
             // std.debug.print("eat `{c}`\n", .{ch});
             if (ch == '\n') {
+                line_num += 1;
                 continue;
             }
             const token = switch (ch) {
@@ -63,7 +67,11 @@ pub fn main() !void {
                 ';' => Tokens.SEMICOLON,
                 '/' => Tokens.SLASH,
                 '*' => Tokens.STAR,
-                else => @panic("unimplemented"),
+                else => {
+                    exit_code = 65;
+                    try io.getStdErr().writer().print("[line {d}] Error: Unexpected character: {c}\n", .{ line_num, ch });
+                    continue;
+                },
             };
             try stdout.writer().print("{s} {c} null\n", .{ @tagName(token), ch });
             try tokens.append(token);
@@ -72,4 +80,5 @@ pub fn main() !void {
     } else {
         try io.getStdOut().writer().print("EOF  null\n", .{}); // Placeholder, remove this line when implementing the scanner
     }
+    process.exit(exit_code);
 }
