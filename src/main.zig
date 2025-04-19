@@ -11,7 +11,7 @@ const Tokens = enum {
     DOT,
     MINUS,
     PLUS,
-    SEMICOLONN,
+    SEMICOLON,
     SLASH,
     STAR,
 };
