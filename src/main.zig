@@ -39,7 +39,6 @@ const Lexer = struct {
     }
 
     pub fn lex(self: *Lexer, source: []const u8) !void {
-        const stdout = io.getStdOut();
         for (source) |ch| {
             // std.debug.print("eat `{c}`\n", .{ch});
             self.cursor += 1;
@@ -76,9 +75,7 @@ const Lexer = struct {
                 },
             };
             try self.tokens.append(token);
-            try stdout.writer().print("{s} {s} null\n", .{ @tagName(token.typ), token.lexme });
         }
-        try stdout.writer().print("EOF  null\n", .{});
         return;
     }
 };
@@ -88,6 +85,7 @@ pub fn main() !void {
     std.debug.print("Logs from your program will appear here!\n", .{});
 
     var exit_code: u8 = 0;
+    const stdout = io.getStdOut();
 
     const args = try std.process.argsAlloc(std.heap.page_allocator);
     defer process.argsFree(std.heap.page_allocator, args);
@@ -114,6 +112,11 @@ pub fn main() !void {
         var lexer = Lexer.new(alloc);
 
         try lexer.lex(file_contents);
+
+        for (lexer.tokens.items) |tok| {
+            try stdout.writer().print("{s} {s} null\n", .{ @tagName(tok.typ), tok.lexme });
+        }
+        try stdout.writer().print("EOF  null\n", .{});
 
         if (lexer.has_err) {
             exit_code = 65;
