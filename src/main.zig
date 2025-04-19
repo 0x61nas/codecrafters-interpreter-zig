@@ -20,6 +20,8 @@ const Token = struct {
         STAR,
         EQUAL,
         EQUAL_EQUAL,
+        BANG,
+        BANG_EQUAL,
     };
 };
 
@@ -63,11 +65,15 @@ const Lexer = struct {
                         if (last_tok.typ == .EQUAL) {
                             _ = self.tokens.pop();
                             tok = .{ .typ = .EQUAL_EQUAL, .lexme = "==" };
+                        } else if (last_tok.typ == .BANG) {
+                            _ = self.tokens.pop();
+                            tok = .{ .typ = .BANG_EQUAL, .lexme = "!=" };
                         }
                     }
                     break :blk tok;
                 },
                 '*' => .{ .typ = .STAR, .lexme = "*" },
+                '!' => .{ .typ = .BANG, .lexme = "!" },
                 else => {
                     self.has_err = true;
                     try io.getStdErr().writer().print("[line {d}] Error: Unexpected character: {c}\n", .{ self.line, ch });
