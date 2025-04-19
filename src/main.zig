@@ -7,6 +7,13 @@ const Tokens = enum {
     RIGHT_PAREN,
     LEFT_BRACE,
     RIGHT_BRACE,
+    COMMA,
+    DOT,
+    MINUS,
+    PLUS,
+    SEMICOLONN,
+    SLASH,
+    STAR,
 };
 
 pub fn main() !void {
@@ -49,6 +56,13 @@ pub fn main() !void {
                 ')' => Tokens.RIGHT_PAREN,
                 '{' => Tokens.LEFT_BRACE,
                 '}' => Tokens.RIGHT_BRACE,
+                ',' => Tokens.COMMA,
+                '.' => Tokens.DOT,
+                '-' => Tokens.MINUS,
+                '+' => Tokens.PLUS,
+                ';' => Tokens.SEMICOLON,
+                '/' => Tokens.SLASH,
+                '*' => Tokens.STAR,
                 else => @panic("unimplemented"),
             };
             try stdout.writer().print("{s} {c} null\n", .{ @tagName(token), ch });
