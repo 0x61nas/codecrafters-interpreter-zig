@@ -30,14 +30,16 @@ const Token = struct {
 };
 
 const Lexer = struct {
+    source: []const u8,
     tokens: std.ArrayList(Token),
     prev_token: ?Token,
     has_err: bool,
     line: u64,
     cursor: u64,
 
-    pub fn new(alloc: std.mem.Allocator) Lexer {
+    pub fn new(source: []const u8, alloc: std.mem.Allocator) Lexer {
         return .{
+            .source = source,
             .tokens = std.ArrayList(Token).init(alloc),
             .prev_token = null,
             .has_err = false,
@@ -46,10 +48,9 @@ const Lexer = struct {
         };
     }
 
-    pub fn lex(self: *Lexer, source: []const u8) !void {
-        for (source) |ch| {
+    pub fn lex(self: *Lexer) !void {
+        while (self.eat()) |ch| {
             // std.debug.print("eat `{c}`\n", .{ch});
-            self.cursor += 1;
             if (ch == '\n') {
                 self.line += 1;
                 continue;
@@ -64,7 +65,17 @@ const Lexer = struct {
                 '-' => .{ .typ = .MINUS, .lexme = "-" },
                 '+' => .{ .typ = .PLUS, .lexme = "+" },
                 ';' => .{ .typ = .SEMICOLON, .lexme = ";" },
-                '/' => .{ .typ = .SLASH, .lexme = "/" },
+                '/' => blk: {
+                    if (self.prev_token) |ptok| {
+                        if (ptok.typ == .SLASH) {
+                            self.eat_comment();
+                            _ = self.tokens.pop();
+                            self.prev_token = null;
+                            continue;
+                        }
+                    }
+                    break :blk .{ .typ = .SLASH, .lexme = "/" };
+                },
                 '=' => blk: {
                     var tok: Token = .{ .typ = .EQUAL, .lexme = "=" };
                     if (self.prev_token) |last_tok| {
@@ -100,6 +111,23 @@ const Lexer = struct {
         }
         return;
     }
+
+    fn eat(self: *Lexer) ?u8 {
+        if (self.cursor < self.source.len) {
+            const eaten = self.source[self.cursor];
+            self.cursor += 1;
+            return eaten;
+        }
+        return null;
+    }
+
+    pub fn eat_comment(self: *Lexer) void {
+        while (self.eat()) |eaten| {
+            if (eaten == '\n') {
+                break;
+            }
+        }
+    }
 };
 
 pub fn main() !void {
@@ -131,9 +159,9 @@ pub fn main() !void {
     // Uncomment this block to pass the first stage
     if (file_contents.len > 0) {
         const alloc = std.heap.page_allocator;
-        var lexer = Lexer.new(alloc);
+        var lexer = Lexer.new(file_contents, alloc);
 
-        try lexer.lex(file_contents);
+        try lexer.lex();
 
         for (lexer.tokens.items) |tok| {
             try stdout.writer().print("{s} {s} null\n", .{ @tagName(tok.typ), tok.lexme });
