@@ -125,6 +125,7 @@ const Lexer = struct {
     pub fn eat_comment(self: *Lexer) void {
         while (self.eat()) |eaten| {
             if (eaten == '\n') {
+                self.line += 1;
                 break;
             }
         }
