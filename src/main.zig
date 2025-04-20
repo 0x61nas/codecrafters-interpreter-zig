@@ -99,6 +99,7 @@ const Lexer = struct {
                 '!' => .{ .typ = .BANG, .lexme = "!" },
                 '<' => .{ .typ = .LESS, .lexme = "<" },
                 '>' => .{ .typ = .GREATER, .lexme = ">" },
+                ' ', '\t' => continue,
                 else => {
                     self.has_err = true;
                     self.prev_token = null;
