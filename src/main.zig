@@ -5,6 +5,7 @@ const io = std.io;
 const Token = struct {
     typ: TokenTyp,
     lexme: []const u8,
+    lit: ?[]const u8,
 
     const TokenTyp = enum {
         LEFT_PAREN,
@@ -26,6 +27,7 @@ const Token = struct {
         LESS_EQUAL,
         GREATER,
         GREATER_EQUAL,
+        STRING,
     };
 };
 
@@ -48,7 +50,7 @@ const Lexer = struct {
         };
     }
 
-    pub fn lex(self: *Lexer) !void {
+    pub fn lex(self: *Lexer, comptime err_handler: type) !void {
         while (self.eat()) |ch| {
             // std.debug.print("eat `{c}`\n", .{ch});
             if (ch == '\n') {
@@ -56,15 +58,15 @@ const Lexer = struct {
                 continue;
             }
             const token: Token = switch (ch) {
-                '(' => .{ .typ = .LEFT_PAREN, .lexme = "(" },
-                ')' => .{ .typ = .RIGHT_PAREN, .lexme = ")" },
-                '{' => .{ .typ = .LEFT_BRACE, .lexme = "{" },
-                '}' => .{ .typ = .RIGHT_BRACE, .lexme = "}" },
-                ',' => .{ .typ = .COMMA, .lexme = "," },
-                '.' => .{ .typ = .DOT, .lexme = "." },
-                '-' => .{ .typ = .MINUS, .lexme = "-" },
-                '+' => .{ .typ = .PLUS, .lexme = "+" },
-                ';' => .{ .typ = .SEMICOLON, .lexme = ";" },
+                '(' => .{ .typ = .LEFT_PAREN, .lexme = "(", .lit = null },
+                ')' => .{ .typ = .RIGHT_PAREN, .lexme = ")", .lit = null },
+                '{' => .{ .typ = .LEFT_BRACE, .lexme = "{", .lit = null },
+                '}' => .{ .typ = .RIGHT_BRACE, .lexme = "}", .lit = null },
+                ',' => .{ .typ = .COMMA, .lexme = ",", .lit = null },
+                '.' => .{ .typ = .DOT, .lexme = ".", .lit = null },
+                '-' => .{ .typ = .MINUS, .lexme = "-", .lit = null },
+                '+' => .{ .typ = .PLUS, .lexme = "+", .lit = null },
+                ';' => .{ .typ = .SEMICOLON, .lexme = ";", .lit = null },
                 '/' => blk: {
                     if (self.prev_token) |ptok| {
                         if (ptok.typ == .SLASH) {
@@ -74,36 +76,40 @@ const Lexer = struct {
                             continue;
                         }
                     }
-                    break :blk .{ .typ = .SLASH, .lexme = "/" };
+                    break :blk .{ .typ = .SLASH, .lexme = "/", .lit = null };
                 },
                 '=' => blk: {
-                    var tok: Token = .{ .typ = .EQUAL, .lexme = "=" };
+                    var tok: Token = .{ .typ = .EQUAL, .lexme = "=", .lit = null };
                     if (self.prev_token) |last_tok| {
                         if (last_tok.typ == .EQUAL) {
                             _ = self.tokens.pop();
-                            tok = .{ .typ = .EQUAL_EQUAL, .lexme = "==" };
+                            tok = .{ .typ = .EQUAL_EQUAL, .lexme = "==", .lit = null };
                         } else if (last_tok.typ == .BANG) {
                             _ = self.tokens.pop();
-                            tok = .{ .typ = .BANG_EQUAL, .lexme = "!=" };
+                            tok = .{ .typ = .BANG_EQUAL, .lexme = "!=", .lit = null };
                         } else if (last_tok.typ == .LESS) {
                             _ = self.tokens.pop();
-                            tok = .{ .typ = .LESS_EQUAL, .lexme = "<=" };
+                            tok = .{ .typ = .LESS_EQUAL, .lexme = "<=", .lit = null };
                         } else if (last_tok.typ == .GREATER) {
                             _ = self.tokens.pop();
-                            tok = .{ .typ = .GREATER_EQUAL, .lexme = ">=" };
+                            tok = .{ .typ = .GREATER_EQUAL, .lexme = ">=", .lit = null };
                         }
                     }
                     break :blk tok;
                 },
-                '*' => .{ .typ = .STAR, .lexme = "*" },
-                '!' => .{ .typ = .BANG, .lexme = "!" },
-                '<' => .{ .typ = .LESS, .lexme = "<" },
-                '>' => .{ .typ = .GREATER, .lexme = ">" },
+                '*' => .{ .typ = .STAR, .lexme = "*", .lit = null },
+                '!' => .{ .typ = .BANG, .lexme = "!", .lit = null },
+                '<' => .{ .typ = .LESS, .lexme = "<", .lit = null },
+                '>' => .{ .typ = .GREATER, .lexme = ">", .lit = null },
                 ' ', '\t' => continue,
+                '\"' => {
+                    try self.eat_string(err_handler);
+                    continue;
+                },
                 else => {
                     self.has_err = true;
                     self.prev_token = null;
-                    try io.getStdErr().writer().print("[line {d}] Error: Unexpected character: {c}\n", .{ self.line, ch });
+                    try err_handler.send(try std.fmt.allocPrint(std.heap.page_allocator, "[line {d}] Error: Unexpected character: {c}\n", .{ self.line, ch }));
                     continue;
                 },
             };
@@ -129,6 +135,25 @@ const Lexer = struct {
                 break;
             }
         }
+    }
+
+    fn eat_string(self: *Lexer, comptime err_handler: type) !void {
+        const lit_start = self.cursor;
+        var closed = false;
+        // const arena = std.heap.ArenaAllocator.init(alloc);
+        while (self.eat()) |eaten| {
+            if (eaten == '\"') {
+                closed = true;
+                break;
+            }
+        }
+        if (!closed) {
+            // self.errors.append()
+            self.has_err = true;
+            try err_handler.send(try std.fmt.allocPrint(std.heap.page_allocator, "[line {d}] Error: Unterminated string.\n", .{self.line}));
+            return;
+        }
+        try self.tokens.append(.{ .typ = .STRING, .lexme = self.source[lit_start - 1 .. self.cursor], .lit = self.source[lit_start .. self.cursor - 1] });
     }
 };
 
@@ -161,12 +186,26 @@ pub fn main() !void {
     // Uncomment this block to pass the first stage
     if (file_contents.len > 0) {
         const alloc = std.heap.page_allocator;
+
+        const ErrorsHandeler = struct {
+            fn send(msg: []const u8) !void {
+                //
+                try io.getStdErr().writer().print("{s}", .{msg});
+            }
+        };
+        const errors_h = ErrorsHandeler;
         var lexer = Lexer.new(file_contents, alloc);
 
-        try lexer.lex();
+        try lexer.lex(errors_h);
 
         for (lexer.tokens.items) |tok| {
-            try stdout.writer().print("{s} {s} null\n", .{ @tagName(tok.typ), tok.lexme });
+            try stdout.writer().print("{s} {s} {s}\n", .{ @tagName(tok.typ), tok.lexme, blk: {
+                if (tok.lit) |lit| {
+                    break :blk lit;
+                } else {
+                    break :blk "null";
+                }
+            } });
         }
         try stdout.writer().print("EOF  null\n", .{});
 
