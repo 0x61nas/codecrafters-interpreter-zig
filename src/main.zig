@@ -29,6 +29,7 @@ const Token = struct {
         GREATER_EQUAL,
         STRING,
         NUMBER,
+        IDENTIFIER,
     };
 };
 
@@ -111,6 +112,10 @@ const Lexer = struct {
                     try self.eat_number(err_handler);
                     continue;
                 },
+                'A'...'Z', 'a'...'z', '_' => {
+                    try self.eat_ident();
+                    continue;
+                },
                 else => {
                     self.has_err = true;
                     self.prev_token = null;
@@ -118,8 +123,7 @@ const Lexer = struct {
                     continue;
                 },
             };
-            self.prev_token = token;
-            try self.tokens.append(token);
+            try self.append_tok(token);
         }
         return;
     }
@@ -155,10 +159,11 @@ const Lexer = struct {
         if (!closed) {
             // self.errors.append()
             self.has_err = true;
+            self.prev_token = null;
             try err_handler.send(try std.fmt.allocPrint(std.heap.page_allocator, "[line {d}] Error: Unterminated string.\n", .{self.line}));
             return;
         }
-        try self.tokens.append(.{ .typ = .STRING, .lexme = self.source[lit_start - 1 .. self.cursor], .lit = self.source[lit_start .. self.cursor - 1] });
+        try self.append_tok(.{ .typ = .STRING, .lexme = self.source[lit_start - 1 .. self.cursor], .lit = self.source[lit_start .. self.cursor - 1] });
     }
 
     fn eat_number(self: *Lexer, comptime err_handler: type) !void {
@@ -186,13 +191,29 @@ const Lexer = struct {
         }
         const lexme = self.source[lit_start..self.cursor];
         const lit = self.source[lit_start..lit_end];
-        try self.tokens.append(.{ .typ = .NUMBER, .lexme = lexme, .lit = blk: {
+        try self.append_tok(.{ .typ = .NUMBER, .lexme = lexme, .lit = blk: {
             if (is_disimal) {
                 break :blk lit;
             } else {
                 break :blk try std.mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ lit, ".0" });
             }
         } });
+    }
+
+    fn eat_ident(self: *Lexer) !void {
+        const lit_start = self.cursor - 1;
+        while (self.eat()) |eaten| {
+            if (!((eaten >= 'a' and eaten <= 'z') or (eaten >= 'A' and eaten <= 'Z') or (eaten >= '0' and eaten <= '9') or eaten == '_')) {
+                self.cursor -= 1;
+                break;
+            }
+        }
+        try self.append_tok(.{ .typ = .IDENTIFIER, .lexme = self.source[lit_start..self.cursor], .lit = null });
+    }
+
+    fn append_tok(self: *Lexer, tok: Token) !void {
+        self.prev_token = tok;
+        try self.tokens.append(tok);
     }
 };
 
