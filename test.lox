@@ -22,3 +22,5 @@ anas = 32
 foo
 bar_
 _bar
+
+fun main() { }

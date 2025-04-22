@@ -30,6 +30,22 @@ const Token = struct {
         STRING,
         NUMBER,
         IDENTIFIER,
+        AND,
+        OR,
+        CLASS,
+        IF,
+        ELSE,
+        WHILE,
+        FOR,
+        FALSE,
+        TRUE,
+        FUN,
+        VAR,
+        NIL,
+        SUPER,
+        THIS,
+        RETURN,
+        PRINT,
     };
 };
 
@@ -37,15 +53,36 @@ const Lexer = struct {
     source: []const u8,
     tokens: std.ArrayList(Token),
     prev_token: ?Token,
+    keywords_map: std.StringHashMap(Token.TokenTyp),
     has_err: bool,
     line: u64,
     cursor: u64,
 
-    pub fn new(source: []const u8, alloc: std.mem.Allocator) Lexer {
+    pub fn new(source: []const u8, alloc: std.mem.Allocator) !Lexer {
+        var map = std.StringHashMap(Token.TokenTyp).init(alloc);
+        try map.ensureTotalCapacity(16);
+        map.putAssumeCapacity("and", .AND);
+        map.putAssumeCapacity("or", .OR);
+        map.putAssumeCapacity("class", .CLASS);
+        map.putAssumeCapacity("if", .IF);
+        map.putAssumeCapacity("else", .ELSE);
+        map.putAssumeCapacity("while", .WHILE);
+        map.putAssumeCapacity("for", .FOR);
+        map.putAssumeCapacity("false", .FALSE);
+        map.putAssumeCapacity("true", .TRUE);
+        map.putAssumeCapacity("fun", .FUN);
+        map.putAssumeCapacity("var", .VAR);
+        map.putAssumeCapacity("nil", .NIL);
+        map.putAssumeCapacity("super", .SUPER);
+        map.putAssumeCapacity("this", .THIS);
+        map.putAssumeCapacity("return", .RETURN);
+        map.putAssumeCapacity("print", .PRINT);
+
         return .{
             .source = source,
             .tokens = std.ArrayList(Token).init(alloc),
             .prev_token = null,
+            .keywords_map = map,
             .has_err = false,
             .line = 1,
             .cursor = 0,
@@ -208,7 +245,14 @@ const Lexer = struct {
                 break;
             }
         }
-        try self.append_tok(.{ .typ = .IDENTIFIER, .lexme = self.source[lit_start..self.cursor], .lit = null });
+        const ident = self.source[lit_start..self.cursor];
+        try self.append_tok(.{ .typ = blk: {
+            var typ: Token.TokenTyp = .IDENTIFIER;
+            if (self.keywords_map.get(ident)) |tt| {
+                typ = tt;
+            }
+            break :blk typ;
+        }, .lexme = ident, .lit = null });
     }
 
     fn append_tok(self: *Lexer, tok: Token) !void {
@@ -254,7 +298,7 @@ pub fn main() !void {
             }
         };
         const errors_h = ErrorsHandeler;
-        var lexer = Lexer.new(file_contents, alloc);
+        var lexer = try Lexer.new(file_contents, alloc);
 
         try lexer.lex(errors_h);
 
