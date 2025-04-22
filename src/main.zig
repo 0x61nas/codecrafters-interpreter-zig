@@ -28,6 +28,7 @@ const Token = struct {
         GREATER,
         GREATER_EQUAL,
         STRING,
+        NUMBER,
     };
 };
 
@@ -106,6 +107,10 @@ const Lexer = struct {
                     try self.eat_string(err_handler);
                     continue;
                 },
+                '0'...'9' => {
+                    try self.eat_number(err_handler);
+                    continue;
+                },
                 else => {
                     self.has_err = true;
                     self.prev_token = null;
@@ -154,6 +159,40 @@ const Lexer = struct {
             return;
         }
         try self.tokens.append(.{ .typ = .STRING, .lexme = self.source[lit_start - 1 .. self.cursor], .lit = self.source[lit_start .. self.cursor - 1] });
+    }
+
+    fn eat_number(self: *Lexer, comptime err_handler: type) !void {
+        const lit_start = self.cursor - 1;
+        var is_disimal = false;
+        var lit_end = self.cursor;
+        while (self.eat()) |eaten| {
+            if (eaten == '.') {
+                if (!is_disimal) {
+                    lit_end = self.cursor + 1;
+                    is_disimal = true;
+                    continue;
+                } else {
+                    self.has_err = true;
+                    try err_handler.send(try std.fmt.allocPrint(std.heap.page_allocator, "[line {d}] Error: Unexpected number.\n", .{self.line}));
+                    return;
+                }
+            }
+            if (!(eaten <= '9' and eaten >= '0')) {
+                self.cursor -= 1;
+                break;
+            } else if (!is_disimal or eaten != '0') {
+                lit_end = self.cursor;
+            }
+        }
+        const lexme = self.source[lit_start..self.cursor];
+        const lit = self.source[lit_start..lit_end];
+        try self.tokens.append(.{ .typ = .NUMBER, .lexme = lexme, .lit = blk: {
+            if (is_disimal) {
+                break :blk lit;
+            } else {
+                break :blk try std.mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ lit, ".0" });
+            }
+        } });
     }
 };
 
