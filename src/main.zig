@@ -6,6 +6,7 @@ const Token = struct {
     typ: TokenTyp,
     lexme: []const u8,
     lit: ?[]const u8,
+    line: u64,
 
     const TokenTyp = enum {
         LEFT_PAREN,
@@ -96,16 +97,16 @@ const Lexer = struct {
                 self.line += 1;
                 continue;
             }
-            const token: Token = switch (ch) {
-                '(' => .{ .typ = .LEFT_PAREN, .lexme = "(", .lit = null },
-                ')' => .{ .typ = .RIGHT_PAREN, .lexme = ")", .lit = null },
-                '{' => .{ .typ = .LEFT_BRACE, .lexme = "{", .lit = null },
-                '}' => .{ .typ = .RIGHT_BRACE, .lexme = "}", .lit = null },
-                ',' => .{ .typ = .COMMA, .lexme = ",", .lit = null },
-                '.' => .{ .typ = .DOT, .lexme = ".", .lit = null },
-                '-' => .{ .typ = .MINUS, .lexme = "-", .lit = null },
-                '+' => .{ .typ = .PLUS, .lexme = "+", .lit = null },
-                ';' => .{ .typ = .SEMICOLON, .lexme = ";", .lit = null },
+            try switch (ch) {
+                '(' => self.append_tok(.LEFT_PAREN, "(", null),
+                ')' => self.append_tok(.RIGHT_PAREN, ")", null),
+                '{' => self.append_tok(.LEFT_BRACE, "{", null),
+                '}' => self.append_tok(.RIGHT_BRACE, "}", null),
+                ',' => self.append_tok(.COMMA, ",", null),
+                '.' => self.append_tok(.DOT, ".", null),
+                '-' => self.append_tok(.MINUS, "-", null),
+                '+' => self.append_tok(.PLUS, "+", null),
+                ';' => self.append_tok(.SEMICOLON, ";", null),
                 '/' => blk: {
                     if (self.prev_token) |ptok| {
                         if (ptok.typ == .SLASH) {
@@ -115,44 +116,40 @@ const Lexer = struct {
                             continue;
                         }
                     }
-                    break :blk .{ .typ = .SLASH, .lexme = "/", .lit = null };
+                    break :blk self.append_tok(.SLASH, "/", null);
                 },
                 '=' => blk: {
-                    var tok: Token = .{ .typ = .EQUAL, .lexme = "=", .lit = null };
+                    var typ: Token.TokenTyp = .EQUAL;
+                    var lexme: []const u8 = "=";
                     if (self.prev_token) |last_tok| {
                         if (last_tok.typ == .EQUAL) {
                             _ = self.tokens.pop();
-                            tok = .{ .typ = .EQUAL_EQUAL, .lexme = "==", .lit = null };
+                            typ = .EQUAL_EQUAL;
+                            lexme = "==";
                         } else if (last_tok.typ == .BANG) {
                             _ = self.tokens.pop();
-                            tok = .{ .typ = .BANG_EQUAL, .lexme = "!=", .lit = null };
+                            typ = .BANG_EQUAL;
+                            lexme = "!=";
                         } else if (last_tok.typ == .LESS) {
                             _ = self.tokens.pop();
-                            tok = .{ .typ = .LESS_EQUAL, .lexme = "<=", .lit = null };
+                            typ = .LESS_EQUAL;
+                            lexme = "<=";
                         } else if (last_tok.typ == .GREATER) {
                             _ = self.tokens.pop();
-                            tok = .{ .typ = .GREATER_EQUAL, .lexme = ">=", .lit = null };
+                            typ = .GREATER_EQUAL;
+                            lexme = ">=";
                         }
                     }
-                    break :blk tok;
+                    break :blk self.append_tok(typ, lexme, null);
                 },
-                '*' => .{ .typ = .STAR, .lexme = "*", .lit = null },
-                '!' => .{ .typ = .BANG, .lexme = "!", .lit = null },
-                '<' => .{ .typ = .LESS, .lexme = "<", .lit = null },
-                '>' => .{ .typ = .GREATER, .lexme = ">", .lit = null },
+                '*' => self.append_tok(.STAR, "*", null),
+                '!' => self.append_tok(.BANG, "!", null),
+                '<' => self.append_tok(.LESS, "<", null),
+                '>' => self.append_tok(.GREATER, ">", null),
                 ' ', '\t' => continue,
-                '\"' => {
-                    try self.eat_string(err_handler);
-                    continue;
-                },
-                '0'...'9' => {
-                    try self.eat_number(err_handler);
-                    continue;
-                },
-                'A'...'Z', 'a'...'z', '_' => {
-                    try self.eat_ident();
-                    continue;
-                },
+                '\"' => self.eat_string(err_handler),
+                '0'...'9' => self.eat_number(err_handler),
+                'A'...'Z', 'a'...'z', '_' => self.eat_ident(),
                 else => {
                     self.has_err = true;
                     self.prev_token = null;
@@ -160,7 +157,6 @@ const Lexer = struct {
                     continue;
                 },
             };
-            try self.append_tok(token);
         }
         return;
     }
@@ -200,7 +196,7 @@ const Lexer = struct {
             try err_handler.send(try std.fmt.allocPrint(std.heap.page_allocator, "[line {d}] Error: Unterminated string.\n", .{self.line}));
             return;
         }
-        try self.append_tok(.{ .typ = .STRING, .lexme = self.source[lit_start - 1 .. self.cursor], .lit = self.source[lit_start .. self.cursor - 1] });
+        try self.append_tok(.STRING, self.source[lit_start - 1 .. self.cursor], self.source[lit_start .. self.cursor - 1]);
     }
 
     fn eat_number(self: *Lexer, comptime err_handler: type) !void {
@@ -228,13 +224,13 @@ const Lexer = struct {
         }
         const lexme = self.source[lit_start..self.cursor];
         const lit = self.source[lit_start..lit_end];
-        try self.append_tok(.{ .typ = .NUMBER, .lexme = lexme, .lit = blk: {
+        try self.append_tok(.NUMBER, lexme, blk: {
             if (is_disimal) {
                 break :blk lit;
             } else {
                 break :blk try std.mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ lit, ".0" });
             }
-        } });
+        });
     }
 
     fn eat_ident(self: *Lexer) !void {
@@ -246,16 +242,17 @@ const Lexer = struct {
             }
         }
         const ident = self.source[lit_start..self.cursor];
-        try self.append_tok(.{ .typ = blk: {
+        try self.append_tok(blk: {
             var typ: Token.TokenTyp = .IDENTIFIER;
             if (self.keywords_map.get(ident)) |tt| {
                 typ = tt;
             }
             break :blk typ;
-        }, .lexme = ident, .lit = null });
+        }, ident, null);
     }
 
-    fn append_tok(self: *Lexer, tok: Token) !void {
+    fn append_tok(self: *Lexer, typ: Token.TokenTyp, lexme: []const u8, lit: ?[]const u8) !void {
+        const tok: Token = .{ .typ = typ, .lexme = lexme, .lit = lit, .line = self.line };
         self.prev_token = tok;
         try self.tokens.append(tok);
     }
