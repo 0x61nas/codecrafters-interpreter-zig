@@ -301,6 +301,8 @@ pub fn main() !void {
     // Uncomment this block to pass the first stage
     if (file_contents.len > 0) {
         const alloc = std.heap.page_allocator;
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        defer arena.deinit();
 
         const ErrorsHandeler = struct {
             fn send(msg: []const u8) !void {
@@ -309,7 +311,7 @@ pub fn main() !void {
             }
         };
         const errors_h = ErrorsHandeler;
-        var lexer = try Lexer.new(file_contents, alloc);
+        var lexer = try Lexer.new(file_contents, arena.allocator());
 
         try lexer.lex(errors_h);
 
