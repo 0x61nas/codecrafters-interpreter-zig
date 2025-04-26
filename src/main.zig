@@ -108,13 +108,9 @@ const Lexer = struct {
                 '+' => self.append_tok(.PLUS, "+", null),
                 ';' => self.append_tok(.SEMICOLON, ";", null),
                 '/' => blk: {
-                    if (self.prev_token) |ptok| {
-                        if (ptok.typ == .SLASH) {
-                            self.eat_comment();
-                            _ = self.tokens.pop();
-                            self.prev_token = null;
-                            continue;
-                        }
+                    if (self.match('/')) {
+                        self.eat_comment();
+                        continue;
                     }
                     break :blk self.append_tok(.SLASH, "/", null);
                 },
@@ -168,6 +164,24 @@ const Lexer = struct {
             return eaten;
         }
         return null;
+    }
+
+    fn peek(self: *Lexer) ?u8 {
+        if (self.cursor < self.source.len) {
+            return self.source[self.cursor];
+        }
+        return null;
+    }
+
+    fn match(self: *Lexer, expected: u8) bool {
+        const eaten = self.eat();
+        if (eaten) |ch| {
+            if (ch == expected) {
+                return true;
+            }
+        }
+        self.cursor -= 1;
+        return false;
     }
 
     pub fn eat_comment(self: *Lexer) void {
