@@ -65,6 +65,7 @@ const Lexer = struct {
         while (me.eat()) |ch| {
             switch (ch) {
                 '&' => @panic("unimplemented"),
+                ' ' => continue,
                 else => try me.eat_cmd(),
             }
         }
@@ -185,6 +186,7 @@ const Shell = struct {
                 .builtin => |b| {
                     switch (b) {
                         .exit => {
+                            // TODO: handle the optional exit code arg
                             me.should_exit = true;
                             break;
                         },
@@ -193,9 +195,9 @@ const Shell = struct {
                             while (idx < lexmes.items.len) {
                                 const ilex = lexmes.items[idx];
                                 idx += 1;
-                                // if (space) {
-                                //     _ = try std.io.getStdOut().write(" ");
-                                // }
+                                if (space) {
+                                    _ = try std.io.getStdOut().write(" ");
+                                }
                                 _ = try std.io.getStdOut().write(switch (ilex) {
                                     .exec => |e| e.cmd,
                                     .builtin => |ib| @tagName(ib),
