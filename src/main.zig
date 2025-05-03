@@ -234,11 +234,9 @@ const Shell = struct {
 
     pub fn setup(me: *Me) !void {
         if (me.ctx.env.get(PATH_VAR)) |paths_raw| {
-            std.debug.print("PATH: {s}\n", .{paths_raw});
             const paths = try parse_path(paths_raw);
             defer paths.deinit();
             for (paths.items) |path| {
-                std.debug.print("\n\n PATH: {s}\n", .{path});
                 var dir = std.fs.openDirAbsolute(path, .{ .access_sub_paths = true, .iterate = true }) catch continue;
                 defer dir.close();
                 var itr = dir.iterateAssumeFirstIteration();
