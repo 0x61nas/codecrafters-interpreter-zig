@@ -9,34 +9,79 @@ const Builtin = enum {
     type,
 };
 
-const CommandTag = enum {
-    builtin,
-    exec,
+const Command = struct {
+    typ: Typ,
+    args: ?[][]const u8,
+
+    const Tag = enum {
+        builtin,
+        exec,
+    };
+
+    const Typ = union(Tag) {
+        builtin: Builtin,
+        exec: External,
+    };
+
+    const External = struct {
+        cmd: []const u8,
+    };
 };
 
-const Command = union(CommandTag) {
-    builtin: Builtin,
-    exec: ExecutableCommand,
+const Token = struct {
+    typ: Typ,
+    lexme: ?[]const u8,
+
+    const Typ = enum {
+        command,
+        background,
+        and_cmd,
+        or_cmd,
+        pipe,
+        redirect,
+        redirect_append,
+        variable,
+        string,
+    };
 };
 
-const ExecutableCommand = struct {
-    cmd: []const u8,
-};
+fn CursorIterator(comptime T: type) type {
+    return struct {
+        const Me = @This();
+        items: []const T,
+        cursor: usize,
 
-const CommandsList = std.ArrayList(Command);
+        pub fn init(items: []const T) Me {
+            return .{
+                .items = items,
+                .cursor = 0,
+            };
+        }
+
+        pub fn next(me: *Me) ?T {
+            if (me.cursor >= me.items.len) {
+                return null;
+            }
+            const eaten = me.items[me.cursor];
+            me.cursor += 1;
+            return eaten;
+        }
+    };
+}
 
 const Lexer = struct {
     const Me = @This();
+    const Tokens = std.ArrayList(Token);
     input: []const u8,
     cursor: usize,
-    lexmes: CommandsList,
+    tokens: Tokens,
     ctx: *const ShellCtx,
 
     pub fn init(input: []const u8, ctx: *const ShellCtx, allocator: mem.Allocator) !Me {
         return .{
             .input = input,
             .cursor = 0,
-            .lexmes = try CommandsList.initCapacity(allocator, 5),
+            .tokens = try Tokens.initCapacity(allocator, 5),
             .ctx = ctx,
         };
     }
@@ -65,6 +110,10 @@ const Lexer = struct {
         while (me.eat()) |ch| {
             switch (ch) {
                 '&' => @panic("unimplemented"),
+                '\"', '\'' => @panic("unimplemented"),
+                '|' => @panic("unimplemented"),
+                '$' => @panic("unimplemented"),
+                '`' => @panic("unimplemented"),
                 ' ' => continue,
                 else => try me.eat_cmd(),
             }
@@ -72,25 +121,30 @@ const Lexer = struct {
     }
 
     fn eat_cmd(me: *Me) !void {
+        var escape = false;
         const cmd_start = me.cursor - 1;
         while (me.eat()) |eaten| {
-            if (eaten == ' ' or eaten == '&') {
+            if (eaten == '\\') {
+                escape = true;
+                continue;
+            }
+            if (eaten == ' ') {
+                me.cursor -= 1;
+                break;
+            }
+            if (eaten == '&' or eaten == '$' or eaten == '|' or eaten == '>') {
+                if (escape) {
+                    escape = false;
+                    continue;
+                }
                 me.cursor -= 1;
                 break;
             }
         }
+        // args?
+        // if (has_args) {}
         const cmd = me.input[cmd_start..me.ve_cursor()];
-
-        if (me.ctx.path_bins.get(cmd)) |ex_bin_path| {
-            try me.lexmes.append(.{ .exec = .{ .cmd = try mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ ex_bin_path, "/", cmd }) } });
-            return;
-        }
-        if (me.ctx.builtins.get(cmd)) |builtin| {
-            try me.lexmes.append(.{ .builtin = builtin });
-            return;
-        }
-
-        try me.lexmes.append(.{ .exec = .{ .cmd = cmd } });
+        try me.tokens.append(.{ .typ = .command, .lexme = cmd });
     }
 };
 
@@ -171,47 +225,88 @@ const Shell = struct {
     pub fn run(me: *Me, user_input: []const u8) !void {
         var lexer = try Lexer.init(user_input, &me.ctx, std.heap.page_allocator);
         try lexer.lex();
-        const lexmes = lexer.lexmes;
-        defer lexmes.deinit();
+        const tokens = lexer.tokens;
+        defer tokens.deinit();
+        var tokens_itr = CursorIterator(Token).init(tokens.items);
 
-        var idx: usize = 0;
-        while (idx < lexmes.items.len) {
-            const lex = lexmes.items[idx];
-            idx += 1;
-            switch (lex) {
-                .exec => |exe| {
-                    _ = exe;
-                    return ExecError.command_not_fond;
-                },
-                .builtin => |b| {
-                    switch (b) {
-                        .exit => {
-                            // TODO: handle the optional exit code arg
-                            me.should_exit = true;
+        while (tokens_itr.next()) |tok| {
+            switch (tok.typ) {
+                .command => {
+                    var args = try std.ArrayList([]const u8).initCapacity(std.heap.page_allocator, 5);
+                    while (tokens_itr.next()) |ntok| {
+                        if (!(ntok.typ == .command or ntok.typ == .variable or ntok.typ == .string)) {
+                            tokens_itr.cursor -= 1;
                             break;
-                        },
-                        .echo => {
-                            var space = false;
-                            while (idx < lexmes.items.len) {
-                                const ilex = lexmes.items[idx];
-                                idx += 1;
-                                if (space) {
-                                    _ = try std.io.getStdOut().write(" ");
-                                }
-                                _ = try std.io.getStdOut().write(switch (ilex) {
-                                    .exec => |e| e.cmd,
-                                    .builtin => |ib| @tagName(ib),
-                                });
-                                space = true;
-                            }
-                            _ = try std.io.getStdOut().write("\n");
-                        },
-                        .type => std.log.debug("type builtin", .{}),
-                        .pwd => _ = try std.io.getStdOut().write(me.ctx.pwd),
-                        .cd => std.log.debug("cd builtin", .{}),
+                        }
+                        try args.append(ntok.lexme.?);
                     }
+
+                    const cmd = tok.lexme.?;
+                    if (me.ctx.path_bins.get(cmd)) |ex_bin_path| {
+                        // cmd.typ = .{ .exec = .{ .cmd = try mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ ex_bin_path, "/", cmd }) } });
+                        _ = ex_bin_path;
+                        return;
+                    }
+                    if (me.ctx.builtins.get(cmd)) |builtin| {
+                        try me.exec_builtin(builtin, args.items);
+                        return;
+                    }
+                    return error.command_not_fond;
                 },
+                .background => @panic("unimplemented"),
+                .and_cmd => @panic("unimplemented"),
+                .or_cmd => @panic("unimplemented"),
+                .pipe => @panic("unimplemented"),
+                .redirect => @panic("unimplemented"),
+                .redirect_append => @panic("unimplemented"),
+                .variable => @panic("unimplemented"),
+                .string => @panic("unimplemented"),
             }
+        }
+    }
+
+    fn exec_builtin(me: *Me, command: Builtin, args: [][]const u8) !void {
+        switch (command) {
+            .exit => {
+                // TODO: handle the optional exit code arg
+                me.should_exit = true;
+                return;
+            },
+            .echo => {
+                var space = false;
+                for (args) |arg| {
+                    if (space) {
+                        _ = try std.io.getStdOut().write(" ");
+                    }
+                    _ = try std.io.getStdOut().write(arg);
+                    space = true;
+                }
+                _ = try std.io.getStdOut().write("\n");
+            },
+            .type => {
+                if (args.len == 0) {
+                    _ = try std.io.getStdErr().write("need one or more argument\n");
+                    return;
+                }
+                for (args) |arg| {
+                    var exsists = false;
+                    if (me.ctx.path_bins.get(arg)) |path| {
+                        try std.io.getStdOut().writer().print("{s}: is {s}/{s}\n", .{ arg, path, arg });
+                        exsists = true;
+                    }
+                    if (me.ctx.builtins.getIndex(arg)) |_| {
+                        try std.io.getStdOut().writer().print("{s} is a shell builtin\n", .{arg});
+                        exsists = true;
+                    }
+                    if (!exsists) {
+                        try std.io.getStdOut().writer().print("{s}: not found\n", .{arg});
+                    }
+                }
+                // const arg = lexmes.items[idx];
+                // if (me.ctx.path_bins.get())
+            },
+            .pwd => _ = try std.io.getStdOut().write(me.ctx.pwd),
+            .cd => std.log.debug("cd builtin", .{}),
         }
     }
 };
