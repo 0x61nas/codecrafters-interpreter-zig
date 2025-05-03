@@ -268,7 +268,7 @@ const Shell = struct {
         while (tokens_itr.next()) |tok| {
             switch (tok.typ) {
                 .command => {
-                    var args = try std.ArrayList([]const u8).initCapacity(std.heap.page_allocator, 5);
+                    var args = try std.ArrayList([]const u8).initCapacity(std.heap.page_allocator, tokens.items.len);
                     while (tokens_itr.next()) |ntok| {
                         if (!(ntok.typ == .command or ntok.typ == .variable or ntok.typ == .string)) {
                             tokens_itr.cursor -= 1;
@@ -277,16 +277,29 @@ const Shell = struct {
                         try args.append(ntok.lexme.?);
                     }
 
-                    const cmd = tok.lexme.?;
+                    const program = tok.lexme.?;
                     // NOTE: codecrafters wants to prefer the builtin on the path, so if the command is available in both of the path and our
                     // shell builtins, we would prefer the builtin; for me i would prefer the opposite
-                    if (me.ctx.builtins.get(cmd)) |builtin| {
+                    if (me.ctx.builtins.get(program)) |builtin| {
                         try me.exec_builtin(builtin, args.items);
                         return;
                     }
-                    if (me.ctx.path_bins.get(cmd)) |ex_bin_path| {
+                    if (me.ctx.path_bins.get(program)) |ex_bin_path| {
                         // cmd.typ = .{ .exec = .{ .cmd = try mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ ex_bin_path, "/", cmd }) } });
-                        _ = ex_bin_path;
+                        args.insertAssumeCapacity(0, try mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ ex_bin_path, "/", program }));
+                        var cp = std.process.Child.init(args.items, std.heap.page_allocator);
+                        cp.cwd = me.ctx.pwd;
+                        // TODO: insert local vars
+                        cp.env_map = &me.ctx.env;
+                        if (cp.spawnAndWait()) |term| {
+                            _ = term;
+                        } else |err| {
+                            switch (err) {
+                                error.FileNotFound => try std.io.getStdOut().writer().print("{s}: command not found\n", .{program}),
+
+                                else => std.debug.print("{any}\n", .{err}),
+                            }
+                        }
                         return;
                     }
                     return error.command_not_fond;
