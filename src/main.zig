@@ -286,7 +286,10 @@ const Shell = struct {
                     }
                     if (me.ctx.path_bins.get(program)) |ex_bin_path| {
                         // cmd.typ = .{ .exec = .{ .cmd = try mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ ex_bin_path, "/", cmd }) } });
-                        args.insertAssumeCapacity(0, try mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ ex_bin_path, "/", program }));
+                        // NOTE: maybe its better approach to use the full bin path
+                        // args.insertAssumeCapacity(0, try mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ ex_bin_path, "/", program }));
+                        _ = ex_bin_path;
+                        args.insertAssumeCapacity(0, program);
                         var cp = std.process.Child.init(args.items, std.heap.page_allocator);
                         cp.cwd = me.ctx.pwd;
                         // TODO: insert local vars
