@@ -357,7 +357,7 @@ const Shell = struct {
                 // const arg = lexmes.items[idx];
                 // if (me.ctx.path_bins.get())
             },
-            .pwd => _ = try std.io.getStdOut().write(me.ctx.pwd),
+            .pwd => _ = try std.io.getStdOut().writer().print("{s}\n", .{me.ctx.pwd}),
             .cd => std.log.debug("cd builtin", .{}),
             .export_ => @panic("unimplemented"),
         }
