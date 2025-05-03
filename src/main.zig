@@ -278,13 +278,15 @@ const Shell = struct {
                     }
 
                     const cmd = tok.lexme.?;
+                    // NOTE: codecrafters wants to prefer the builtin on the path, so if the command is available in both of the path and our
+                    // shell builtins, we would prefer the builtin; for me i would prefer the opposite
+                    if (me.ctx.builtins.get(cmd)) |builtin| {
+                        try me.exec_builtin(builtin, args.items);
+                        return;
+                    }
                     if (me.ctx.path_bins.get(cmd)) |ex_bin_path| {
                         // cmd.typ = .{ .exec = .{ .cmd = try mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ ex_bin_path, "/", cmd }) } });
                         _ = ex_bin_path;
-                        return;
-                    }
-                    if (me.ctx.builtins.get(cmd)) |builtin| {
-                        try me.exec_builtin(builtin, args.items);
                         return;
                     }
                     return error.command_not_fond;
@@ -326,8 +328,8 @@ const Shell = struct {
                     return;
                 }
                 for (args) |arg| {
-                    // NOTE: codecrafters wants to prefer the builtins on the path, so if the command is avilable in both of the path and our
-                    // shell builtins, we would prefer the builtins; for me i would prefer the opposite
+                    // NOTE: codecrafters wants to prefer the builtin on the path, so if the command is available in both of the path and our
+                    // shell builtins, we would prefer the builtin; for me i would prefer the opposite
                     if (me.ctx.builtins.getIndex(arg)) |_| {
                         try std.io.getStdOut().writer().print("{s} is a shell builtin\n", .{arg});
                     } else if (me.ctx.path_bins.get(arg)) |path| {
