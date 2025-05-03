@@ -326,10 +326,12 @@ const Shell = struct {
                     return;
                 }
                 for (args) |arg| {
-                    if (me.ctx.path_bins.get(arg)) |path| {
-                        try std.io.getStdOut().writer().print("{s} is {s}/{s}\n", .{ arg, path, arg });
-                    } else if (me.ctx.builtins.getIndex(arg)) |_| {
+                    // NOTE: codecrafters wants to prefer the builtins on the path, so if the command is avilable in both of the path and our
+                    // shell builtins, we would prefer the builtins; for me i would prefer the opposite
+                    if (me.ctx.builtins.getIndex(arg)) |_| {
                         try std.io.getStdOut().writer().print("{s} is a shell builtin\n", .{arg});
+                    } else if (me.ctx.path_bins.get(arg)) |path| {
+                        try std.io.getStdOut().writer().print("{s} is {s}/{s}\n", .{ arg, path, arg });
                     } else {
                         try std.io.getStdOut().writer().print("{s}: not found\n", .{arg});
                     }
