@@ -326,16 +326,11 @@ const Shell = struct {
                     return;
                 }
                 for (args) |arg| {
-                    var exsists = false;
                     if (me.ctx.path_bins.get(arg)) |path| {
-                        try std.io.getStdOut().writer().print("{s}: is {s}/{s}\n", .{ arg, path, arg });
-                        exsists = true;
-                    }
-                    if (me.ctx.builtins.getIndex(arg)) |_| {
+                        try std.io.getStdOut().writer().print("{s} is {s}/{s}\n", .{ arg, path, arg });
+                    } else if (me.ctx.builtins.getIndex(arg)) |_| {
                         try std.io.getStdOut().writer().print("{s} is a shell builtin\n", .{arg});
-                        exsists = true;
-                    }
-                    if (!exsists) {
+                    } else {
                         try std.io.getStdOut().writer().print("{s}: not found\n", .{arg});
                     }
                 }
