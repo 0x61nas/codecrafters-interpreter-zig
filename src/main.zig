@@ -7,6 +7,7 @@ const Builtin = enum {
     pwd,
     cd,
     type,
+    export_,
 };
 
 const Command = struct {
@@ -42,6 +43,7 @@ const Token = struct {
         redirect_append,
         variable,
         string,
+        export_local,
     };
 };
 
@@ -115,12 +117,12 @@ const Lexer = struct {
                 '$' => @panic("unimplemented"),
                 '`' => @panic("unimplemented"),
                 ' ' => continue,
-                else => try me.eat_cmd(),
+                else => try me.eat_cmd_or_var(),
             }
         }
     }
 
-    fn eat_cmd(me: *Me) !void {
+    fn eat_cmd_or_var(me: *Me) !void {
         var escape = false;
         const cmd_start = me.cursor - 1;
         while (me.eat()) |eaten| {
@@ -130,6 +132,15 @@ const Lexer = struct {
             }
             if (eaten == ' ') {
                 me.cursor -= 1;
+                break;
+            }
+            if (eaten == '=') {
+                if (escape) {
+                    escape = false;
+                    continue;
+                }
+                // oh, no, this mf wanna local export
+                try me.eat_local_export(cmd_start);
                 break;
             }
             if (eaten == '&' or eaten == '$' or eaten == '|' or eaten == '>') {
@@ -145,6 +156,33 @@ const Lexer = struct {
         // if (has_args) {}
         const cmd = me.input[cmd_start..me.ve_cursor()];
         try me.tokens.append(.{ .typ = .command, .lexme = cmd });
+    }
+
+    fn eat_local_export(me: *Me, var_start: usize) !void {
+        // we have eaten the `=` already so no need to check that
+        var escaped = false;
+        var in_single_quote = false;
+        var in_d_quote = false;
+        while (me.eat()) |eaten| {
+            if (eaten == '\'' and !escaped) {
+                in_single_quote = !in_single_quote;
+                continue;
+            } else if (eaten == '\"' and !escaped) {
+                in_d_quote = true;
+                continue;
+            } else if (eaten == '\\') {
+                escaped = !escaped;
+                continue;
+            }
+
+            if (eaten == ' ' and !in_single_quote and !in_d_quote) {
+                break;
+            }
+            // if ((in_single_quote and eaten == '\'') or eaten == '\"' and !escaped) {
+            //     break;
+            // }
+        }
+        try me.tokens.append(.{ .typ = .export_local, .lexme = me.input[var_start..me.ve_cursor()] });
     }
 };
 
@@ -261,6 +299,7 @@ const Shell = struct {
                 .redirect_append => @panic("unimplemented"),
                 .variable => @panic("unimplemented"),
                 .string => @panic("unimplemented"),
+                .export_local => {},
             }
         }
     }
@@ -307,6 +346,7 @@ const Shell = struct {
             },
             .pwd => _ = try std.io.getStdOut().write(me.ctx.pwd),
             .cd => std.log.debug("cd builtin", .{}),
+            .export_ => @panic("unimplemented"),
         }
     }
 };
@@ -319,7 +359,7 @@ pub fn main() !void {
     var buffer: [1024]u8 = undefined;
     const shell_ctx = try ShellCtx.init();
     var shell = Shell.init(shell_ctx);
-    // try shell.setup();
+    try shell.setup();
     while (true) {
         try stdout.print("$ ", .{});
         const user_input = try stdin.readUntilDelimiter(&buffer, '\n');
