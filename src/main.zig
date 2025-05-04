@@ -432,7 +432,10 @@ const Shell = struct {
                     abslute_path = try std.heap.page_allocator.dupe(u8, buffer.items);
                 }
                 var dir = std.fs.openDirAbsolute(abslute_path, .{ .iterate = false, .access_sub_paths = false }) catch |err| {
-                    std.debug.print("Failed to open directory '{s}': {any}\n", .{ abslute_path, err });
+                    switch (err) {
+                        error.FileNotFound => try std.io.getStdErr().writer().print("cd: {s}: No such file or directory\n", .{abslute_path}),
+                        else => std.debug.print("Failed to open directory '{s}': {any}\n", .{ abslute_path, err }),
+                    }
                     return;
                 };
                 dir.close();
