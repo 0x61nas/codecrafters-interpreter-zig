@@ -506,7 +506,9 @@ const Shell = struct {
                             continue;
                         }
                     }
-                    try out.append('/');
+                    if (itr.peek()) |_| {
+                        try out.append('/');
+                    }
                 },
                 else => try out.append(np),
             }
