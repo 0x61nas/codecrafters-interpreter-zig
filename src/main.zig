@@ -458,6 +458,7 @@ const Shell = struct {
                 }
             } else if (first != '/') {
                 try out.appendSlice(me.ctx.pwd);
+                try out.append('/');
             }
         }
         while (itr.next()) |np| {
