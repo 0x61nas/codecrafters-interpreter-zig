@@ -68,6 +68,13 @@ fn CursorIterator(comptime T: type) type {
             me.cursor += 1;
             return eaten;
         }
+
+        pub fn peek(me: *const Me) ?T {
+            if (me.cursor >= me.items.len) {
+                return null;
+            }
+            return me.items[me.cursor];
+        }
     };
 }
 
@@ -186,7 +193,53 @@ const Lexer = struct {
     }
 };
 
+pub fn FixedCircularStack(comptime T: type, comptime capacity: usize) type {
+    return struct {
+        const Me = @This();
+        data: [capacity]T = undefined,
+        start: usize = 0,
+        len: usize = 0,
+
+        pub fn push(self: *Me, value: T) void {
+            if (self.len < capacity) {
+                const idx = (self.start + self.len) % capacity;
+                self.data[idx] = value;
+                self.len += 1;
+            } else {
+                // Overwrite oldest and move start forward
+                self.data[self.start] = value;
+                self.start = (self.start + 1) % capacity;
+            }
+        }
+
+        pub fn pop(self: *Me) ?T {
+            if (self.len == 0) return null;
+
+            const idx = (self.start + self.len - 1) % capacity;
+            const value = self.data[idx];
+            self.len -= 1;
+            return value;
+        }
+
+        pub fn peek(self: *Me) ?T {
+            if (self.len == 0) return null;
+            const idx = (self.start + self.len - 1) % capacity;
+            return self.data[idx];
+        }
+
+        pub fn reset(self: *Me) void {
+            self.start = 0;
+            self.len = 0;
+        }
+
+        pub fn count(self: *Me) usize {
+            return self.len;
+        }
+    };
+}
+
 const PATH_VAR = "PATH";
+const HOME_VAR = "HOME";
 
 const EnvVarsMap = std.process.EnvMap;
 const AliasesMap = std.StringArrayHashMap([]const u8);
@@ -195,11 +248,13 @@ const BuiltinsMap = std.StringArrayHashMap(Builtin);
 
 const ShellCtx = struct {
     const Me = @This();
+    const CdCircularStack = FixedCircularStack([]const u8, 5);
     env: EnvVarsMap,
     aliases: AliasesMap,
     path_bins: PathBinsMap,
     builtins: BuiltinsMap,
     pwd: []const u8,
+    cd_stack: CdCircularStack,
 
     pub fn init() !Me {
         var builtins = BuiltinsMap.init(std.heap.page_allocator);
@@ -219,6 +274,7 @@ const ShellCtx = struct {
             .path_bins = path_bins,
             .builtins = builtins,
             .pwd = cwd,
+            .cd_stack = CdCircularStack{},
         };
     }
 };
@@ -358,8 +414,90 @@ const Shell = struct {
                 // if (me.ctx.path_bins.get())
             },
             .pwd => _ = try std.io.getStdOut().writer().print("{s}\n", .{me.ctx.pwd}),
-            .cd => std.log.debug("cd builtin", .{}),
+            .cd => {
+                //
+                var abslute_path: []const u8 = undefined;
+                if (args.len == 0) {
+                    // cd home
+                    if (me.ctx.env.get(HOME_VAR)) |home| {
+                        abslute_path = home;
+                    }
+                } else if (args[0][0] == '-') {
+                    abslute_path = me.ctx.cd_stack.data[0];
+                } else {
+                    const target = args[0];
+                    var buffer = try std.ArrayList(u8).initCapacity(std.heap.page_allocator, target.len);
+                    defer buffer.deinit();
+                    try me.expand_relative_path(target, &buffer);
+                    abslute_path = try std.heap.page_allocator.dupe(u8, buffer.items);
+                }
+                var dir = std.fs.openDirAbsolute(abslute_path, .{ .iterate = false, .access_sub_paths = false }) catch |err| {
+                    std.debug.print("Failed to open directory '{s}': {any}\n", .{ abslute_path, err });
+                    return;
+                };
+                dir.close();
+                me.ctx.cd_stack.push(me.ctx.pwd);
+                me.ctx.pwd = abslute_path;
+            },
             .export_ => @panic("unimplemented"),
+        }
+    }
+
+    fn expand_relative_path(me: *const Me, path: []const u8, out: *std.ArrayList(u8)) !void {
+        var escaped = false;
+        var in_single_quote = false;
+        var itr = CursorIterator(u8).init(path);
+        if (itr.peek()) |first| {
+            if (first == '~') {
+                if (me.ctx.env.get(HOME_VAR)) |home| {
+                    try out.appendSlice(home);
+                    _ = itr.next();
+                }
+            } else if (first != '/') {
+                try out.appendSlice(me.ctx.pwd);
+            }
+        }
+        while (itr.next()) |np| {
+            if (escaped or in_single_quote) {
+                escaped = false;
+                try out.append(np);
+                continue;
+            }
+            switch (np) {
+                '\\' => {
+                    escaped = true;
+                    continue;
+                },
+                '\'' => {
+                    try out.append(np);
+                    in_single_quote = !in_single_quote;
+                    continue;
+                },
+                '.' => {
+                    if (itr.peek()) |next| {
+                        if (next == '.') {
+                            _ = itr.next();
+                            if (itr.peek() == '.') {
+                                try std.io.getStdErr().writeAll("No\n");
+                                return;
+                            }
+                            // shop a one level from the current path
+                            var first = true;
+                            while (true) {
+                                if (out.popOrNull()) |ch| {
+                                    if ((ch == '/' and !first) or out.items.len == 1) {
+                                        break;
+                                    }
+                                    first = false;
+                                } else {
+                                    out.appendAssumeCapacity('/');
+                                }
+                            }
+                        }
+                    }
+                },
+                else => try out.append(np),
+            }
         }
     }
 };
