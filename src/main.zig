@@ -482,19 +482,27 @@ const Shell = struct {
                                 return;
                             }
                             // shop a one level from the current path
+                            if (out.items.len == 1) {
+                                // there's no place we can go to
+                                continue;
+                            }
                             var first = true;
                             while (true) {
-                                if (out.popOrNull()) |ch| {
-                                    if ((ch == '/' and !first) or out.items.len == 1) {
-                                        break;
-                                    }
-                                    first = false;
-                                } else {
-                                    out.appendAssumeCapacity('/');
+                                if ((out.pop() == '/' and !first) or out.items.len == 1) {
+                                    break;
                                 }
+                                first = false;
                             }
                         }
                     }
+                },
+                '/' => {
+                    if (out.getLastOrNull()) |last| {
+                        if (last == '/') {
+                            continue;
+                        }
+                    }
+                    try out.append('/');
                 },
                 else => try out.append(np),
             }
