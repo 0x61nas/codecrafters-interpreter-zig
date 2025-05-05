@@ -244,7 +244,7 @@ const HOME_VAR = "HOME";
 const EnvVarsMap = std.process.EnvMap;
 const AliasesMap = std.StringArrayHashMap([]const u8);
 const PathBinsMap = std.StringArrayHashMap([]const u8);
-const BuiltinsMap = std.StringArrayHashMap(Builtin);
+const BuiltinsMap = std.StaticStringMap(Builtin);
 
 const ShellCtx = struct {
     const Me = @This();
@@ -257,12 +257,15 @@ const ShellCtx = struct {
     cd_stack: CdCircularStack,
 
     pub fn init() !Me {
-        var builtins = BuiltinsMap.init(std.heap.page_allocator);
-        const builtin_valuse = std.enums.values(Builtin);
-        try builtins.ensureTotalCapacity(builtin_valuse.len);
-        for (builtin_valuse) |b| {
-            builtins.putAssumeCapacity(@tagName(b), b);
-        }
+        const builtins = BuiltinsMap.initComptime(comptime blk: {
+            const builtin_valuse = std.enums.values(Builtin);
+            var arr: [builtin_valuse.len]struct { []const u8, Builtin } = undefined;
+            for (0..builtin_valuse.len) |idx| {
+                const tag = builtin_valuse[idx];
+                arr[idx] = .{ @tagName(tag), tag };
+            }
+            break :blk arr;
+        });
         const env = try std.process.getEnvMap(std.heap.page_allocator);
         const aliases = AliasesMap.init(std.heap.page_allocator);
         const path_bins = PathBinsMap.init(std.heap.page_allocator);
