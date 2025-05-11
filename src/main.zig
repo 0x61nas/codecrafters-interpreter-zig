@@ -44,6 +44,8 @@ const Token = struct {
         variable,
         string,
         export_local,
+        unexpandable_qoute,
+        expandable_qoute,
     };
 };
 
@@ -119,7 +121,8 @@ const Lexer = struct {
         while (me.eat()) |ch| {
             switch (ch) {
                 '&' => @panic("unimplemented"),
-                '\"', '\'' => @panic("unimplemented"),
+                '\'' => try me.eat_unexpandable_quote(),
+                '"' => try me.eat_expandable_quote(),
                 '|' => @panic("unimplemented"),
                 '$' => @panic("unimplemented"),
                 '`' => @panic("unimplemented"),
@@ -190,6 +193,20 @@ const Lexer = struct {
             // }
         }
         try me.tokens.append(.{ .typ = .export_local, .lexme = me.input[var_start..me.ve_cursor()] });
+    }
+
+    fn eat_unexpandable_quote(me: *Me) !void {
+        const qoute_start = me.cursor;
+        while (me.eat()) |eaten| {
+            if (eaten == '\'') {
+                // TODO(anas): handle the unclosed quote
+                break;
+            }
+        }
+        try me.tokens.append(.{ .typ = .unexpandable_qoute, .lexme = me.input[qoute_start .. me.cursor - 1] });
+    }
+    fn eat_expandable_quote(me: *Me) !void {
+        _ = me;
     }
 };
 
@@ -326,10 +343,10 @@ const Shell = struct {
 
         while (tokens_itr.next()) |tok| {
             switch (tok.typ) {
-                .command => {
+                .command, .unexpandable_qoute, .expandable_qoute => {
                     var args = try std.ArrayList([]const u8).initCapacity(std.heap.page_allocator, tokens.items.len);
                     while (tokens_itr.next()) |ntok| {
-                        if (!(ntok.typ == .command or ntok.typ == .variable or ntok.typ == .string)) {
+                        if (!(ntok.typ == .command or ntok.typ == .variable or ntok.typ == .string or ntok.typ == .unexpandable_qoute or ntok.typ == .expandable_qoute)) {
                             tokens_itr.cursor -= 1;
                             break;
                         }
