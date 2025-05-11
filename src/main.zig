@@ -404,13 +404,13 @@ const Shell = struct {
                 return;
             },
             .echo => {
-                var space = false;
+                // var space = false;
                 for (args) |arg| {
-                    if (space) {
-                        _ = try std.io.getStdOut().write(" ");
-                    }
+                    // if (space) {
+                    //     _ = try std.io.getStdOut().write(" ");
+                    // }
                     _ = try std.io.getStdOut().write(arg);
-                    space = true;
+                    // space = true;
                 }
                 _ = try std.io.getStdOut().write("\n");
             },
