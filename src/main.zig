@@ -46,7 +46,7 @@ const Token = struct {
         // Chunks of text *inside* double quotes can be 'word' tokens
 
         // Variable related
-        dollar, // $
+        var_word, // $NAME
         assignment,
         dollar_brace_open, // ${
         brace_open,
@@ -69,7 +69,6 @@ const Token = struct {
         redirect_in, // <
         // redirect_heredoc, // << (more complex)
 
-        space, // Keep for separation, parser will mostly consume
         eof, // End Of File/Input
     };
 };
@@ -177,11 +176,11 @@ const Lexer = struct {
     }
 
     pub fn lex(me: *Me) !void {
-        // const token_start_cursor = me.cursor;
+        // const token_start_cursor = me.cursor
         while (me.eat()) |ch| {
             switch (ch) {
                 ' ', '\t', '\n' => {
-                    // if (me.tokens.items.len == 0) continue;
+                    // if (me.tokens.items.len = 0) continue;
                     // const prv = me.tokens.getLast().tag;
                     // if (prv != .space and (prv == .single_quoted_literal or prv == .double_quote_end)) {
                     //     try me.tokens.append(.{ .tag = .space });
@@ -195,7 +194,11 @@ const Lexer = struct {
                     } else if (me.match('(')) {
                         try me.add_token(.dollar_paren_open, null);
                     } else {
-                        try me.add_token(.dollar, null);
+                        if (me.peek()) |next| {
+                            if (next == ' ') try me.add_token(.word, me.input[me.cursor - 1 .. me.cursor]);
+                        } else {
+                            try me.eat_var_word();
+                        }
                     }
                 },
                 '{' => try me.add_token(.brace_open, null),
@@ -250,6 +253,23 @@ const Lexer = struct {
             }
         }
         try me.add_token(.single_quoted_literal, me.input[qoute_start .. me.cursor - 1]);
+    }
+
+    fn eat_var_word(me: *Me) !void {
+        var escaped = false;
+        const cmd_start = me.cursor;
+        while (me.eat()) |eaten| {
+            if (eaten == '\\') {
+                escaped = true;
+            } else if (!escaped and is_shell_metachar(eaten)) {
+                me.cursor -= 1;
+                break;
+            } else {
+                escaped = false;
+            }
+        }
+        const cmd = me.input[cmd_start..me.ve_cursor()];
+        try me.add_token(.var_word, cmd);
     }
 
     fn eat_word(me: *Me) !void {
@@ -455,21 +475,10 @@ const Shell = struct {
 
                 while (tokens_itr.peek()) |next_token_struct| {
                     const next_tag = next_token_struct.tag;
-                    if (next_tag == .space) {
-                        _ = tokens_itr.next(); // Consume space
-                        args_lexemes.appendAssumeCapacity(" ");
-                        continue;
-                    }
-                    if (next_tag == .dollar) {
-                        if (tokens_itr.peek()) |nn_tok| {
-                            if (nn_tok.tag == .space) {
-                                args_lexemes.appendAssumeCapacity("$");
-                            } else if (nn_tok.tag == .word) {
-                                if (nn_tok.word_idx) |idx| {
-                                    if (me.ctx.env.get(lexer.words.items[idx])) |val| {
-                                        args_lexemes.appendAssumeCapacity(val);
-                                    }
-                                }
+                    if (next_tag == .var_word) {
+                        if (next_token_struct.word_idx) |idx| {
+                            if (me.ctx.env.get(lexer.words.items[idx])) |val| {
+                                args_lexemes.appendAssumeCapacity(val);
                             }
                         }
                     }
@@ -520,7 +529,7 @@ const Shell = struct {
                     return;
                 }
                 return error.command_not_fond;
-            } else if (tag == .dollar) {} else if (tag == .dollar_brace_open) {}
+            } else if (tag == .var_word) {} else if (tag == .dollar_brace_open) {}
         }
     }
 
@@ -538,7 +547,7 @@ const Shell = struct {
                     // i.e: echo 'helo''bash'
                     const ptr = arg.ptr;
                     const prv = ptr - 2;
-                    if (space and prv[0] != '\'') {
+                    if (space and prv[0] != '\'' and prv[0] != '"') {
                         _ = try std.io.getStdOut().write(" ");
                     }
                     _ = try std.io.getStdOut().write(arg);
