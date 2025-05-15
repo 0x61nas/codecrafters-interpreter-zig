@@ -181,11 +181,11 @@ const Lexer = struct {
         while (me.eat()) |ch| {
             switch (ch) {
                 ' ', '\t', '\n' => {
-                    if (me.tokens.items.len == 0) continue;
-                    const prv = me.tokens.getLast().tag;
-                    if (prv != .space and (prv == .single_quoted_literal or prv == .double_quote_end)) {
-                        try me.tokens.append(.{ .tag = .space });
-                    }
+                    // if (me.tokens.items.len == 0) continue;
+                    // const prv = me.tokens.getLast().tag;
+                    // if (prv != .space and (prv == .single_quoted_literal or prv == .double_quote_end)) {
+                    //     try me.tokens.append(.{ .tag = .space });
+                    // }
                 },
                 '\'' => try me.eat_single_quoted_lit(),
                 '"' => try me.add_token(.double_quote_start, null),
@@ -242,6 +242,7 @@ const Lexer = struct {
             if (eaten == '\\') {
                 escaped = !escaped;
             } else if (eaten == '\'' and !escaped) {
+                // if (me.match('\'')) continue;
                 // TODO(anas): handle the unclosed quote
                 break;
             } else {
@@ -533,7 +534,11 @@ const Shell = struct {
             .echo => {
                 var space = false;
                 for (args) |arg| {
-                    if (space) {
+                    // NOTE(anas): this probably is unsafe, but we need to do it to be compatable with Bash's echo implementiotion
+                    // i.e: echo 'helo''bash'
+                    const ptr = arg.ptr;
+                    const prv = ptr - 2;
+                    if (space and prv[0] != '\'') {
                         _ = try std.io.getStdOut().write(" ");
                     }
                     _ = try std.io.getStdOut().write(arg);
