@@ -1,5 +1,6 @@
 const std = @import("std");
 const mem = std.mem;
+const Allocator = mem.Allocator;
 
 const Builtin = enum {
     exit,
@@ -30,22 +31,46 @@ const Command = struct {
 };
 
 const Token = struct {
-    typ: Typ,
-    lexme: ?[]const u8,
+    tag: Tag,
+    word_idx: ?usize = null,
 
-    const Typ = enum {
-        command,
-        background,
-        and_cmd,
-        or_cmd,
-        pipe,
-        redirect,
-        redirect_append,
-        variable,
-        string,
-        export_local,
-        unexpandable_qoute,
-        expandable_qoute,
+    const Tag = enum {
+        // Word-like tokens (can be command, arg, var name etc.)
+        word, // General purpose for sequences of non-special characters
+
+        // Literals (content already processed by lexer, e.g., quotes stripped)
+        // OR structural tokens if parser handles quote content
+        single_quoted_literal, // '...' -> lexme is content
+        double_quote_start, // "
+        double_quote_end, // "
+        // Chunks of text *inside* double quotes can be 'word' tokens
+
+        // Variable related
+        dollar, // $
+        assignment,
+        dollar_brace_open, // ${
+        brace_open,
+        brace_close, // }
+
+        // Command Substitution
+        dollar_paren_open, // $(
+        backtick, // `
+        paren_open,
+        paren_close, // ) (can be for $( ) or other grouping)
+
+        // Operators & Control
+        pipe, // |
+        and_cmd, // &&
+        or_cmd, // ||
+        semicolon, // ;
+        background, // &
+        redirect_out, // >
+        redirect_out_append, // >>
+        redirect_in, // <
+        // redirect_heredoc, // << (more complex)
+
+        space, // Keep for separation, parser will mostly consume
+        eof, // End Of File/Input
     };
 };
 
@@ -81,20 +106,29 @@ fn CursorIterator(comptime T: type) type {
 }
 
 const Lexer = struct {
-    const Me = @This();
-    const Tokens = std.ArrayList(Token);
     input: []const u8,
     cursor: usize,
     tokens: Tokens,
-    ctx: *const ShellCtx,
+    words: Words, // stores the actual string content for the tokens
+    allocator: Allocator,
 
-    pub fn init(input: []const u8, ctx: *const ShellCtx, allocator: mem.Allocator) !Me {
+    const Me = @This();
+    const Tokens = std.ArrayList(Token);
+    const Words = std.ArrayList([]const u8);
+
+    pub fn init(input: []const u8, allocator: Allocator) !Me {
         return .{
             .input = input,
             .cursor = 0,
             .tokens = try Tokens.initCapacity(allocator, 5),
-            .ctx = ctx,
+            .words = try Words.initCapacity(allocator, 5),
+            .allocator = allocator,
         };
+    }
+
+    pub fn deinit(me: *Me) void {
+        me.words.deinit();
+        me.tokens.deinit();
     }
 
     fn eat(me: *Me) ?u8 {
@@ -117,96 +151,128 @@ const Lexer = struct {
         return me.cursor;
     }
 
+    fn match(me: *Me, ch: u8) bool {
+        if (me.cursor >= me.input.len) {
+            return false;
+        }
+        if (me.input[me.cursor] == ch) {
+            me.cursor += 1;
+            return true;
+        }
+        return false;
+    }
+
+    fn peek(me: *const Me) ?u8 {
+        if (me.finshed()) return null;
+        return me.input[me.cursor];
+    }
+
+    fn add_token(me: *Me, tag: Token.Tag, word_slice: ?[]const u8) !void {
+        var word_idx: ?usize = null;
+        if (word_slice) |slice| {
+            try me.words.append(slice);
+            word_idx = me.words.items.len - 1;
+        }
+        try me.tokens.append(.{ .tag = tag, .word_idx = word_idx });
+    }
+
     pub fn lex(me: *Me) !void {
+        // const token_start_cursor = me.cursor;
         while (me.eat()) |ch| {
             switch (ch) {
-                '&' => @panic("unimplemented"),
-                '\'' => try me.eat_unexpandable_quote(),
-                '"' => try me.eat_expandable_quote(),
-                '|' => @panic("unimplemented"),
-                '$' => @panic("unimplemented"),
-                '`' => @panic("unimplemented"),
-                ' ' => continue,
-                else => try me.eat_cmd_or_var(),
+                ' ', '\t', '\n' => {
+                    if (me.tokens.items.len == 0) continue;
+                    const prv = me.tokens.getLast().tag;
+                    if (prv != .space and (prv == .single_quoted_literal or prv == .double_quote_end)) {
+                        try me.tokens.append(.{ .tag = .space });
+                    }
+                },
+                '\'' => try me.eat_single_quoted_lit(),
+                '"' => try me.add_token(.double_quote_start, null),
+                '$' => {
+                    if (me.match('{')) {
+                        try me.add_token(.dollar_brace_open, null);
+                    } else if (me.match('(')) {
+                        try me.add_token(.dollar_paren_open, null);
+                    } else {
+                        try me.add_token(.dollar, null);
+                    }
+                },
+                '{' => try me.add_token(.brace_open, null),
+                '}' => try me.add_token(.brace_close, null),
+                '(' => try me.add_token(.paren_open, null),
+                ')' => try me.add_token(.paren_close, null),
+                '`' => try me.add_token(.backtick, null),
+                '|' => {
+                    if (me.match('|')) {
+                        try me.add_token(.or_cmd, null);
+                    } else {
+                        try me.add_token(.pipe, null);
+                    }
+                },
+                '&' => {
+                    if (me.match('&')) {
+                        try me.add_token(.and_cmd, null);
+                    } else {
+                        try me.add_token(.background, null);
+                    }
+                },
+                ';' => try me.add_token(.semicolon, null),
+                '>' => {
+                    if (me.match('>')) {
+                        try me.add_token(.redirect_out_append, null);
+                    } else {
+                        try me.add_token(.redirect_out, null);
+                    }
+                },
+                '<' => {
+                    // TODO: Handle Here Document '<<' logic if needed
+                    try me.add_token(.redirect_in, null);
+                },
+                '=' => try me.add_token(.assignment, null),
+                else => try me.eat_word(),
             }
         }
     }
 
-    fn eat_cmd_or_var(me: *Me) !void {
-        var escape = false;
+    fn eat_single_quoted_lit(me: *Me) !void {
+        const qoute_start = me.cursor;
+        var escaped = false;
+        while (me.eat()) |eaten| {
+            if (eaten == '\\') {
+                escaped = !escaped;
+            } else if (eaten == '\'' and !escaped) {
+                // TODO(anas): handle the unclosed quote
+                break;
+            } else {
+                escaped = false;
+            }
+        }
+        try me.add_token(.single_quoted_literal, me.input[qoute_start .. me.cursor - 1]);
+    }
+
+    fn eat_word(me: *Me) !void {
+        var escaped = false;
         const cmd_start = me.cursor - 1;
         while (me.eat()) |eaten| {
             if (eaten == '\\') {
-                escape = true;
-                continue;
-            }
-            if (eaten == ' ') {
+                escaped = true;
+            } else if (!escaped and is_shell_metachar(eaten)) {
                 me.cursor -= 1;
                 break;
-            }
-            if (eaten == '=') {
-                if (escape) {
-                    escape = false;
-                    continue;
-                }
-                // oh, no, this mf wanna local export
-                try me.eat_local_export(cmd_start);
-                break;
-            }
-            if (eaten == '&' or eaten == '$' or eaten == '|' or eaten == '>') {
-                if (escape) {
-                    escape = false;
-                    continue;
-                }
-                me.cursor -= 1;
-                break;
+            } else {
+                escaped = false;
             }
         }
-        // args?
-        // if (has_args) {}
         const cmd = me.input[cmd_start..me.ve_cursor()];
-        try me.tokens.append(.{ .typ = .command, .lexme = cmd });
+        try me.add_token(.word, cmd);
     }
 
-    fn eat_local_export(me: *Me, var_start: usize) !void {
-        // we have eaten the `=` already so no need to check that
-        var escaped = false;
-        var in_single_quote = false;
-        var in_d_quote = false;
-        while (me.eat()) |eaten| {
-            if (eaten == '\'' and !escaped) {
-                in_single_quote = !in_single_quote;
-                continue;
-            } else if (eaten == '\"' and !escaped) {
-                in_d_quote = true;
-                continue;
-            } else if (eaten == '\\') {
-                escaped = !escaped;
-                continue;
-            }
-
-            if (eaten == ' ' and !in_single_quote and !in_d_quote) {
-                break;
-            }
-            // if ((in_single_quote and eaten == '\'') or eaten == '\"' and !escaped) {
-            //     break;
-            // }
-        }
-        try me.tokens.append(.{ .typ = .export_local, .lexme = me.input[var_start..me.ve_cursor()] });
-    }
-
-    fn eat_unexpandable_quote(me: *Me) !void {
-        const qoute_start = me.cursor;
-        while (me.eat()) |eaten| {
-            if (eaten == '\'') {
-                // TODO(anas): handle the unclosed quote
-                break;
-            }
-        }
-        try me.tokens.append(.{ .typ = .unexpandable_qoute, .lexme = me.input[qoute_start .. me.cursor - 1] });
-    }
-    fn eat_expandable_quote(me: *Me) !void {
-        _ = me;
+    fn is_shell_metachar(char: u8) bool {
+        return switch (char) {
+            '|', '&', ';', '<', '>', '(', ')', '$', '`', '"', '=', '\'', ' ', '\t', '\n' => true,
+            else => false,
+        };
     }
 };
 
@@ -272,8 +338,9 @@ const ShellCtx = struct {
     builtins: BuiltinsMap,
     pwd: []const u8,
     cd_stack: CdCircularStack,
+    allocator: Allocator,
 
-    pub fn init() !Me {
+    pub fn init(allocator: Allocator) !Me {
         const builtins = BuiltinsMap.initComptime(comptime blk: {
             const builtin_valuse = std.enums.values(Builtin);
             var arr: [builtin_valuse.len]struct { []const u8, Builtin } = undefined;
@@ -283,10 +350,14 @@ const ShellCtx = struct {
             }
             break :blk arr;
         });
-        const env = try std.process.getEnvMap(std.heap.page_allocator);
-        const aliases = AliasesMap.init(std.heap.page_allocator);
-        const path_bins = PathBinsMap.init(std.heap.page_allocator);
-        const cwd = try std.process.getCwdAlloc(std.heap.page_allocator);
+
+        const env = try std.process.getEnvMap(allocator);
+        const aliases = AliasesMap.init(allocator);
+        const path_bins = PathBinsMap.init(allocator);
+        const cwd = try std.process.getCwdAlloc(allocator);
+
+        // Initialize cd_stack properly, ensure 'pwd' is also on stack if it's the first "previous" dir
+        const cd_stack = CdCircularStack{};
 
         return .{
             .env = env,
@@ -294,8 +365,36 @@ const ShellCtx = struct {
             .path_bins = path_bins,
             .builtins = builtins,
             .pwd = cwd,
-            .cd_stack = CdCircularStack{},
+            .cd_stack = cd_stack,
+            .allocator = allocator,
         };
+    }
+
+    pub fn deinit(me: *Me) void {
+        me.allocator.free(me.pwd);
+        // Free cd_stack entries if they are owned
+        for (0..me.cd_stack.len) |i| {
+            const idx = (me.cd_stack.start + i) % me.cd_stack.data.len;
+            me.allocator.free(me.cd_stack.data[idx]);
+        }
+        me.env.deinit();
+        // For AliasesMap and PathBinsMap, if keys/values are duplicated, they need explicit freeing.
+        // Assuming keys/values are either slices of static data or managed by getEnvMap/getCwdAlloc for now.
+        // If `path_bins.put` duplicated strings, they need to be freed in a loop.
+        var path_it = me.path_bins.iterator();
+        while (path_it.next()) |entry| {
+            // Assuming keys and values were duplicated with allocator
+            me.allocator.free(entry.key_ptr.*);
+            me.allocator.free(entry.value_ptr.*);
+        }
+        me.path_bins.deinit();
+
+        var alias_it = me.aliases.iterator();
+        while (alias_it.next()) |entry| {
+            me.allocator.free(entry.key_ptr.*);
+            me.allocator.free(entry.value_ptr.*);
+        }
+        me.aliases.deinit();
     }
 };
 
@@ -303,9 +402,10 @@ const Shell = struct {
     const Me = @This();
     should_exit: bool,
     ctx: ShellCtx,
+    allocator: Allocator,
 
-    pub fn init(ctx: ShellCtx) Me {
-        return .{ .should_exit = false, .ctx = ctx };
+    pub fn init(ctx: ShellCtx, allocator: Allocator) Me {
+        return .{ .should_exit = false, .ctx = ctx, .allocator = allocator };
     }
 
     pub fn setup(me: *Me) !void {
@@ -322,7 +422,7 @@ const Shell = struct {
                         defer bin.close();
                         const stat = bin.stat() catch continue;
                         if ((stat.mode & 0o111) != 0) {
-                            try me.ctx.path_bins.put(try std.heap.page_allocator.dupe(u8, entry.name), try std.heap.page_allocator.dupe(u8, path));
+                            try me.ctx.path_bins.put(try me.allocator.dupe(u8, entry.name), try me.allocator.dupe(u8, path));
                         }
                     }
                 }
@@ -335,64 +435,91 @@ const Shell = struct {
     };
 
     pub fn run(me: *Me, user_input: []const u8) !void {
-        var lexer = try Lexer.init(user_input, &me.ctx, std.heap.page_allocator);
+        var lexer = try Lexer.init(user_input, me.allocator);
+        defer lexer.deinit();
         try lexer.lex();
         const tokens = lexer.tokens;
-        defer tokens.deinit();
         var tokens_itr = CursorIterator(Token).init(tokens.items);
 
         while (tokens_itr.next()) |tok| {
-            switch (tok.typ) {
-                .command, .unexpandable_qoute, .expandable_qoute => {
-                    var args = try std.ArrayList([]const u8).initCapacity(std.heap.page_allocator, tokens.items.len);
-                    while (tokens_itr.next()) |ntok| {
-                        if (!(ntok.typ == .command or ntok.typ == .variable or ntok.typ == .string or ntok.typ == .unexpandable_qoute or ntok.typ == .expandable_qoute)) {
-                            tokens_itr.cursor -= 1;
-                            break;
-                        }
-                        try args.append(ntok.lexme.?);
-                    }
+            const tag = tok.tag;
+            if (tag == .word) {
+                const program = lexer.words.items[tok.word_idx.?];
 
-                    const program = tok.lexme.?;
-                    // NOTE: codecrafters wants to prefer the builtin on the path, so if the command is available in both of the path and our
-                    // shell builtins, we would prefer the builtin; for me i would prefer the opposite
-                    if (me.ctx.builtins.get(program)) |builtin| {
-                        try me.exec_builtin(builtin, args.items);
-                        return;
-                    }
-                    if (me.ctx.path_bins.get(program)) |ex_bin_path| {
-                        // cmd.typ = .{ .exec = .{ .cmd = try mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ ex_bin_path, "/", cmd }) } });
-                        // NOTE: maybe its better approach to use the full bin path
-                        // args.insertAssumeCapacity(0, try mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ ex_bin_path, "/", program }));
-                        _ = ex_bin_path;
-                        args.insertAssumeCapacity(0, program);
-                        var cp = std.process.Child.init(args.items, std.heap.page_allocator);
-                        cp.cwd = me.ctx.pwd;
-                        // TODO: insert local vars
-                        cp.env_map = &me.ctx.env;
-                        if (cp.spawnAndWait()) |term| {
-                            _ = term;
-                        } else |err| {
-                            switch (err) {
-                                error.FileNotFound => try std.io.getStdOut().writer().print("{s}: command not found\n", .{program}),
+                // Collect arguments for the command
+                var args_lexemes = try std.ArrayList([]const u8).initCapacity(me.allocator, lexer.tokens.items.len);
+                defer args_lexemes.deinit();
 
-                                else => std.debug.print("{any}\n", .{err}),
+                args_lexemes.appendAssumeCapacity(program);
+
+                while (tokens_itr.peek()) |next_token_struct| {
+                    const next_tag = next_token_struct.tag;
+                    if (next_tag == .space) {
+                        _ = tokens_itr.next(); // Consume space
+                        args_lexemes.appendAssumeCapacity(" ");
+                        continue;
+                    }
+                    if (next_tag == .dollar) {
+                        if (tokens_itr.peek()) |nn_tok| {
+                            if (nn_tok.tag == .space) {
+                                args_lexemes.appendAssumeCapacity("$");
+                            } else if (nn_tok.tag == .word) {
+                                if (nn_tok.word_idx) |idx| {
+                                    if (me.ctx.env.get(lexer.words.items[idx])) |val| {
+                                        args_lexemes.appendAssumeCapacity(val);
+                                    }
+                                }
                             }
                         }
-                        return;
                     }
-                    return error.command_not_fond;
-                },
-                .background => @panic("unimplemented"),
-                .and_cmd => @panic("unimplemented"),
-                .or_cmd => @panic("unimplemented"),
-                .pipe => @panic("unimplemented"),
-                .redirect => @panic("unimplemented"),
-                .redirect_append => @panic("unimplemented"),
-                .variable => @panic("unimplemented"),
-                .string => @panic("unimplemented"),
-                .export_local => {},
-            }
+                    // These tokens are considered part of arguments
+                    if (next_tag == .word or
+                        next_tag == .single_quoted_literal or
+                        next_tag == .assignment or // VAR=val can be an argument
+                        // For full shell, also: .double_quote_start (then parse until end), variable tokens after expansion.
+                        // For now, keeping it simple for what lexer produces as whole lexemes.
+                        next_tag == .backtick // `foo` (after expansion)
+                    // TODO: add more arg types like contents of double quotes, var expansions
+                    ) {
+                        _ = tokens_itr.next(); // Consume argument token
+                        if (next_token_struct.word_idx) |arg_idx| {
+                            args_lexemes.appendAssumeCapacity(lexer.words.items[arg_idx]);
+                        }
+                        // Other tokens without word_idx (like .dollar_brace_open) would need expansion first.
+                    } else {
+                        break; // Not an argument token for a simple command (e.g., pipe, semicolon, eof)
+                    }
+                }
+
+                // NOTE: codecrafters wants to prefer the builtin on the path, so if the command is available in both of the path and our
+                // shell builtins, we would prefer the builtin; for me i would prefer the opposite
+                if (me.ctx.builtins.get(program)) |builtin| {
+                    try me.exec_builtin(builtin, args_lexemes.items[1..]);
+                    return;
+                }
+                if (me.ctx.path_bins.get(program)) |ex_bin_path| {
+                    // cmd.typ = .{ .exec = .{ .cmd = try mem.concat(me.allocator, u8, &[_][]const u8{ ex_bin_path, "/", cmd }) } });
+                    // NOTE: maybe its better approach to use the full bin path
+                    // args.insertAssumeCapacity(0, try mem.concat(me.allocator, u8, &[_][]const u8{ ex_bin_path, "/", program }));
+                    _ = ex_bin_path;
+
+                    var cp = std.process.Child.init(args_lexemes.items, me.allocator);
+                    cp.cwd = me.ctx.pwd;
+                    // TODO: insert local vars
+                    cp.env_map = &me.ctx.env;
+                    if (cp.spawnAndWait()) |term| {
+                        _ = term;
+                    } else |err| {
+                        switch (err) {
+                            error.FileNotFound => try std.io.getStdOut().writer().print("{s}: command not found\n", .{program}),
+
+                            else => std.debug.print("{any}\n", .{err}),
+                        }
+                    }
+                    return;
+                }
+                return error.command_not_fond;
+            } else if (tag == .dollar) {} else if (tag == .dollar_brace_open) {}
         }
     }
 
@@ -404,13 +531,13 @@ const Shell = struct {
                 return;
             },
             .echo => {
-                // var space = false;
+                var space = false;
                 for (args) |arg| {
-                    // if (space) {
-                    //     _ = try std.io.getStdOut().write(" ");
-                    // }
+                    if (space) {
+                        _ = try std.io.getStdOut().write(" ");
+                    }
                     _ = try std.io.getStdOut().write(arg);
-                    // space = true;
+                    space = true;
                 }
                 _ = try std.io.getStdOut().write("\n");
             },
@@ -420,14 +547,15 @@ const Shell = struct {
                     return;
                 }
                 for (args) |arg| {
+                    const cmd = arg;
                     // NOTE: codecrafters wants to prefer the builtin on the path, so if the command is available in both of the path and our
                     // shell builtins, we would prefer the builtin; for me i would prefer the opposite
-                    if (me.ctx.builtins.getIndex(arg)) |_| {
-                        try std.io.getStdOut().writer().print("{s} is a shell builtin\n", .{arg});
-                    } else if (me.ctx.path_bins.get(arg)) |path| {
-                        try std.io.getStdOut().writer().print("{s} is {s}/{s}\n", .{ arg, path, arg });
+                    if (me.ctx.builtins.getIndex(cmd)) |_| {
+                        try std.io.getStdOut().writer().print("{s} is a shell builtin\n", .{cmd});
+                    } else if (me.ctx.path_bins.get(cmd)) |path| {
+                        try std.io.getStdOut().writer().print("{s} is {s}/{s}\n", .{ cmd, path, cmd });
                     } else {
-                        try std.io.getStdOut().writer().print("{s}: not found\n", .{arg});
+                        try std.io.getStdOut().writer().print("{s}: not found\n", .{cmd});
                     }
                 }
                 // const arg = lexmes.items[idx];
@@ -442,7 +570,7 @@ const Shell = struct {
                     if (me.ctx.env.get(HOME_VAR)) |home| {
                         abslute_path = home;
                     }
-                } else if (args[0][0] == '-') {
+                } else if (mem.eql(u8, args[0], "-")) {
                     abslute_path = me.ctx.cd_stack.data[0];
                 } else {
                     const target = args[0];
@@ -542,8 +670,9 @@ pub fn main() !void {
 
     const stdin = std.io.getStdIn().reader();
     var buffer: [1024]u8 = undefined;
-    const shell_ctx = try ShellCtx.init();
-    var shell = Shell.init(shell_ctx);
+    const allocator = std.heap.page_allocator;
+    const shell_ctx = try ShellCtx.init(allocator);
+    var shell = Shell.init(shell_ctx, allocator);
     try shell.setup();
     while (true) {
         try stdout.print("$ ", .{});
