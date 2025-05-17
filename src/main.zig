@@ -41,8 +41,8 @@ const Token = struct {
         // Literals (content already processed by lexer, e.g., quotes stripped)
         // OR structural tokens if parser handles quote content
         single_quoted_literal, // '...' -> lexme is content
-        double_quote_start, // "
-        double_quote_end, // "
+        double_quote_start,
+        double_quote_end,
         // Chunks of text *inside* double quotes can be 'word' tokens
 
         // Variable related
@@ -187,18 +187,16 @@ const Lexer = struct {
                     // }
                 },
                 '\'' => try me.eat_single_quoted_lit(),
-                '"' => try me.add_token(.double_quote_start, null),
+                '"' => try me.eat_duoble_quote(),
                 '$' => {
                     if (me.match('{')) {
                         try me.add_token(.dollar_brace_open, null);
                     } else if (me.match('(')) {
                         try me.add_token(.dollar_paren_open, null);
+                    } else if (me.match(' ')) {
+                        try me.add_token(.word, me.input[me.cursor - 1 .. me.cursor]);
                     } else {
-                        if (me.peek()) |next| {
-                            if (next == ' ') try me.add_token(.word, me.input[me.cursor - 1 .. me.cursor]);
-                        } else {
-                            try me.eat_var_word();
-                        }
+                        try me.eat_var_word();
                     }
                 },
                 '{' => try me.add_token(.brace_open, null),
@@ -253,6 +251,44 @@ const Lexer = struct {
             }
         }
         try me.add_token(.single_quoted_literal, me.input[qoute_start .. me.cursor - 1]);
+    }
+
+    fn eat_duoble_quote(me: *Me) !void {
+        var qoute_start = me.cursor;
+        var escaped = false;
+        try me.add_token(.double_quote_start, null);
+        while (me.eat()) |eaten| {
+            if (eaten == '\\') {
+                escaped = !escaped;
+            } else if (eaten == '$' and !escaped) {
+                try me.add_token(.single_quoted_literal, me.input[qoute_start .. me.cursor - 1]);
+                if (me.match('{')) {
+                    try me.add_token(.dollar_brace_open, null);
+                } else if (me.match('(')) {
+                    try me.add_token(.dollar_paren_open, null);
+                } else if (me.match(' ')) {
+                    try me.add_token(.word, me.input[me.cursor - 1 .. me.cursor]);
+                } else {
+                    try me.eat_var_word();
+                }
+                qoute_start = me.cursor;
+            } else if (eaten == '"' and !escaped) {
+                // if (me.match('\'')) continue;
+                // TODO(anas): handle the unclosed quote
+                break;
+            } else {
+                while (me.eat()) |next| {
+                    if (next == '$' or next == '`') {
+                        me.cursor -= 1;
+                        break;
+                    }
+                }
+                try me.add_token(.single_quoted_literal, me.input[qoute_start..me.cursor]);
+                escaped = false;
+            }
+            qoute_start = me.cursor;
+        }
+        try me.add_token(.double_quote_end, null);
     }
 
     fn eat_var_word(me: *Me) !void {
@@ -461,10 +497,13 @@ const Shell = struct {
         try lexer.lex();
         const tokens = lexer.tokens;
         var tokens_itr = CursorIterator(Token).init(tokens.items);
+        var in_double_quote = false;
 
         while (tokens_itr.next()) |tok| {
             const tag = tok.tag;
-            if (tag == .word) {
+            if (tag == .double_quote_start) {
+                in_double_quote = true;
+            } else if (tag == .word or tag == .single_quoted_literal) {
                 const program = lexer.words.items[tok.word_idx.?];
 
                 // Collect arguments for the command
@@ -473,30 +512,52 @@ const Shell = struct {
 
                 args_lexemes.appendAssumeCapacity(program);
 
-                while (tokens_itr.peek()) |next_token_struct| {
+                var double_expansion = false;
+                while (tokens_itr.next()) |next_token_struct| {
                     const next_tag = next_token_struct.tag;
-                    if (next_tag == .var_word) {
+                    if (next_tag == .double_quote_start) {
+                        double_expansion = true;
+                    } else if (next_tag == .var_word) {
                         if (next_token_struct.word_idx) |idx| {
                             if (me.ctx.env.get(lexer.words.items[idx])) |val| {
-                                args_lexemes.appendAssumeCapacity(val);
+                                // NOTE(anas): The arguments always have the 'program' as the first item, and we dont want to append random stuff to it
+                                if (double_expansion and args_lexemes.items.len > 1) {
+                                    const item = args_lexemes.pop() orelse unreachable;
+                                    var n = try me.allocator.alloc(u8, item.len + val.len);
+                                    @memcpy(n[0..item.len], item);
+                                    @memcpy(n[item.len..], val);
+                                    args_lexemes.appendAssumeCapacity(n);
+                                } else {
+                                    // args_lexemes.appendAssumeCapacity(try me.allocator.dupe(u8, val));
+                                    args_lexemes.appendAssumeCapacity(val);
+                                }
                             }
                         }
-                    }
-                    // These tokens are considered part of arguments
-                    if (next_tag == .word or
+                    } else if (next_tag == .word or
                         next_tag == .single_quoted_literal or
                         next_tag == .assignment or // VAR=val can be an argument
                         // For full shell, also: .double_quote_start (then parse until end), variable tokens after expansion.
                         // For now, keeping it simple for what lexer produces as whole lexemes.
                         next_tag == .backtick // `foo` (after expansion)
-                    // TODO: add more arg types like contents of double quotes, var expansions
+                            // TODO: add more arg types like contents of double quotes, var expansions
                     ) {
-                        _ = tokens_itr.next(); // Consume argument token
                         if (next_token_struct.word_idx) |arg_idx| {
-                            args_lexemes.appendAssumeCapacity(lexer.words.items[arg_idx]);
+                            const val = lexer.words.items[arg_idx];
+                            if (double_expansion and args_lexemes.items.len > 1) {
+                                const item = args_lexemes.pop() orelse unreachable;
+                                var n = try me.allocator.alloc(u8, item.len + val.len);
+                                @memcpy(n[0..item.len], item);
+                                @memcpy(n[item.len..], val);
+                                args_lexemes.appendAssumeCapacity(n);
+                            } else {
+                                args_lexemes.appendAssumeCapacity(val);
+                            }
                         }
                         // Other tokens without word_idx (like .dollar_brace_open) would need expansion first.
+                    } else if (next_tag == .double_quote_end) {
+                        double_expansion = false;
                     } else {
+                        tokens_itr.cursor -= 1; // return the current token before exits
                         break; // Not an argument token for a simple command (e.g., pipe, semicolon, eof)
                     }
                 }
