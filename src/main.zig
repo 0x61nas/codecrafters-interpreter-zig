@@ -278,7 +278,7 @@ const Lexer = struct {
                 break;
             } else {
                 while (me.eat()) |next| {
-                    if (next == '$' or next == '`') {
+                    if (next == '$' or next == '`' or next == '"') {
                         me.cursor -= 1;
                         break;
                     }
@@ -288,7 +288,7 @@ const Lexer = struct {
             }
             qoute_start = me.cursor;
         }
-        try me.add_token(.double_quote_end, null);
+        if (me.match('"')) try me.add_token(.double_quote_end, null);
     }
 
     fn eat_var_word(me: *Me) !void {
